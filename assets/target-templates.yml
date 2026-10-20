@@ -1,0 +1,31 @@
+templates:
+  - id: rousi
+    name: Rousi Pro
+    url: https://rousi.pro/
+    warmupPath: /favicon.ico
+    localStorageKeys:
+      - token
+
+  - id: mteam
+    name: 馒头
+    url: https://kp.m-team.cc/
+    warmupPath: /favicon.ico
+    localStorageKeys:
+      - auth
+      - did
+      - persist:user
+      - persist:torrent
+      - apiHost
+      - visitorId
+
+  - id: yemapt
+    name: www.yemapt.org
+    url: https://www.yemapt.org
+    warmupPath: /user/login
+    localStorageKeys: []
+
+  - id: ubits
+    name: UBits
+    url: https://ubits.club/attendance.php
+    warmupPath: /favicon.ico
+    localStorageKeys: []

@@ -1,0 +1,14 @@
+/config/
+/config-test/
+/config-acceptance/
+data/
+cookiecloud-data/
+src/
+.git/
+**/__pycache__/
+*.log
+*.tgz
+*.tar
+.vnc_pw
+acceptance/
+progress.md

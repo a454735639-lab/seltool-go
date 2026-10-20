@@ -1,0 +1,36 @@
+# 精简运行镜像：Chromium + 虚拟显示 + VNC，不含 JDK / Selenium / Python / Node
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    DISPLAY=:99 \
+    TZ=Asia/Shanghai \
+    SELTOOL_CHROME_BIN=/usr/bin/chromium \
+    SE_VNC_PASSWORD=selenium
+
+# 只要 Chromium、X 服务和一款中文字体；不装 novnc/websockify（会拖进 nodejs + python3）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        chromium \
+        xvfb \
+        x11vnc \
+        fluxbox \
+        fonts-wqy-zenhei \
+        ca-certificates \
+        tini \
+        curl \
+    && rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/* /usr/share/locale/* \
+    # noVNC 只取静态文件，约 1.2 MB，不引入任何运行时
+    && mkdir -p /opt && curl -fsSL https://github.com/novnc/noVNC/archive/refs/tags/v1.6.0.tar.gz \
+        | tar xz -C /opt \
+    && mv /opt/noVNC-1.6.0 /usr/share/novnc \
+    && ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html \
+    && apt-get purge -y curl
+
+WORKDIR /app
+COPY seltool /app/seltool
+COPY vncproxy /app/vncproxy
+COPY deploy/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/seltool /app/vncproxy /app/entrypoint.sh
+
+EXPOSE 8080 7900
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]

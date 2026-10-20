@@ -1,0 +1,31 @@
+# Same Debian/Chromium/X11/noVNC runtime as the frozen production baseline.
+# Flatten only build-layer duplication; do not remove rendering or font libraries.
+ARG GO_IMAGE=golang:1.26-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade
+ARG RUNTIME_IMAGE=seltool-go:rollback-20261018
+FROM ${GO_IMAGE} AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY vendor ./vendor
+COPY *.go ./
+COPY cmd ./cmd
+COPY assets ./assets
+COPY web ./web
+RUN CGO_ENABLED=0 go test -mod=vendor ./... \
+ && CGO_ENABLED=0 go build -mod=vendor -trimpath -ldflags="-s -w" -o /out/seltool . \
+ && CGO_ENABLED=0 go build -mod=vendor -trimpath -ldflags="-s -w" -o /out/vncproxy ./cmd/vncproxy
+
+FROM ${RUNTIME_IMAGE} AS runtime
+USER root
+RUN rm -f /app/seltool /app/vncproxy /app/entrypoint.sh \
+ && rm -rf /usr/share/novnc/tests /usr/share/novnc/docs /usr/share/novnc/utils \
+           /usr/share/novnc/.github /usr/share/novnc/examples
+
+FROM scratch
+COPY --from=runtime / /
+COPY --from=build /out/seltool /app/seltool
+COPY --from=build /out/vncproxy /app/vncproxy
+COPY deploy/entrypoint.sh /app/entrypoint.sh
+ENV DISPLAY=:99 TZ=Asia/Shanghai SELTOOL_CHROME_BIN=/usr/bin/chromium SE_VNC_PASSWORD=selenium
+WORKDIR /app
+EXPOSE 8080 7900
+ENTRYPOINT ["/usr/bin/tini","--","/app/entrypoint.sh"]
