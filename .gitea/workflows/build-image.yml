@@ -119,27 +119,49 @@ jobs:
       - name: 7. 冒烟运行
         run: |
           set -eu
-          # 容器内监听 8080（生产 compose 映射 8081:8080）
-          # 镜像里没有 wget/curl，所以从宿主机探测映射端口
-          HOST_PORT=18081
+          # 注意：job 容器与被测容器不在同一网络命名空间，
+          # 在 job 里 curl 127.0.0.1:<映射端口> 访问的是 job 自己，必然失败。
+          # 所以在被测容器内部自检：状态 → 端口监听 → HTTP 请求。
           NAME="st-smoke-$$"
-          docker run -d --name "$NAME" -p "${HOST_PORT}:8080" "$IMAGE:$VERSION" >/dev/null
+          docker run -d --name "$NAME" -p 18081:8080 "$IMAGE:$VERSION" >/dev/null
           trap 'docker rm -f "$NAME" >/dev/null 2>&1 || true' EXIT
+
+          sleep 6
+          status="$(docker inspect -f '{{.State.Status}}' "$NAME")"
+          if [ "$status" != "running" ]; then
+            echo "容器未运行：$status"
+            docker logs --tail 30 "$NAME"
+            exit 1
+          fi
+          echo "容器状态：running"
+
+          # 8080 的十六进制是 1F90，检查监听
           ok=0
-          for i in $(seq 1 40); do
-            if curl -sf -o /dev/null --max-time 3 "http://127.0.0.1:${HOST_PORT}/login.html"; then
-              echo "第 $i 次探测：${HOST_PORT} 已就绪"
+          for i in $(seq 1 20); do
+            if docker exec "$NAME" sh -c 'grep -q ":1F90" /proc/net/tcp' 2>/dev/null; then
+              echo "第 $i 次探测：8080 已监听"
               ok=1
               break
             fi
             sleep 2
           done
           if [ "$ok" != "1" ]; then
-            echo "冒烟失败，容器日志："
+            echo "8080 未监听"
             docker logs --tail 30 "$NAME"
             exit 1
           fi
-          echo "冒烟通过"
+
+          # 容器内发一个真实 HTTP 请求（bash 支持 /dev/tcp）
+          code="$(docker exec "$NAME" bash -c '
+            exec 3<>/dev/tcp/127.0.0.1/8080
+            printf "GET /login.html HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n" >&3
+            head -1 <&3
+          ' 2>/dev/null || true)"
+          echo "HTTP 响应行：${code:-<空>}"
+          case "$code" in
+            *200*) echo "冒烟通过" ;;
+            *) echo "HTTP 探测未返回 200"; docker logs --tail 30 "$NAME"; exit 1 ;;
+          esac
 
       - name: 8. 推送 Registry
         env:
