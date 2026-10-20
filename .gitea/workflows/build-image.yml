@@ -3,9 +3,9 @@
 #
 # 运行位置：NAS 上的 act_runner（容器 act_runner，标签 ubuntu-latest）
 # 触发：push 到 master，或手动 workflow_dispatch
-# 产物：10.0.0.1:3003/gitadmin/seltool-go:<版本> / :latest / :sha-<short>
+# 产物：10.0.0.1:3003/gitadmin/seltool-go:<日期-sha> / :latest / :sha-<short>
 #
-# 关键点（沿用 Sunpanel 仓库踩过的坑）：
+# 关键点（都是实际踩过的）：
 #   1. 容器内必须清空代理变量 —— NAS 的 Docker daemon 会注入 HTTP_PROXY，
 #      访问内网 Gitea 会被 Clash 转走返回 502。
 #   2. 基础镜像必须预先存在 —— Docker Hub 直连会走 IPv6 超时，所以先 pull 再 --pull=false。
@@ -13,6 +13,8 @@
 #      所以用 git clone + REPO_READ_TOKEN 检出。
 #   4. seltool-go:runtime-slim2 是宿主机本地镜像，不在 registry 里。
 #      job 容器共享宿主 daemon，FROM 能引用到；丢了用 sh scripts/build.sh --base 重建。
+#   5. 容器内监听 8080（生产 compose 映射 8081:8080），且镜像里没有 wget/curl，
+#      所以冒烟测试从宿主机 curl 探测映射端口。
 # ==========================================================================
 name: build-image
 
@@ -44,13 +46,12 @@ jobs:
           uname -m
           docker version --format 'client={{.Client.Version}} server={{.Server.Version}}'
           git --version
-          # 基础镜像不在 registry 里，缺了会给出明确提示而不是一句 pull access denied
           if ! docker image inspect "$RUNTIME_IMAGE" >/dev/null 2>&1; then
-            echo "✗ 基础镜像 $RUNTIME_IMAGE 不存在"
-            echo "  在 NAS 上执行：sh scripts/build.sh --base"
+            echo "基础镜像 $RUNTIME_IMAGE 不存在"
+            echo "在 NAS 上执行：sh scripts/build.sh --base"
             exit 1
           fi
-          echo "✓ 基础镜像就绪：$(docker images --format '{{.Size}}' "$RUNTIME_IMAGE" | head -1)"
+          echo "基础镜像就绪：$(docker images --format '{{.Size}}' "$RUNTIME_IMAGE" | head -1)"
 
       - name: 2. 检出源码
         env:
@@ -107,75 +108,37 @@ jobs:
           arch="$(docker image inspect "$IMAGE:$VERSION" --format '{{.Architecture}}')"
           [ "$arch" = "arm64" ] || { echo "架构不是 arm64：$arch"; exit 1; }
           docker run --rm --entrypoint sh "$IMAGE:$VERSION" -c '
-            test -x /app/seltool && echo "  ✓ /app/seltool 可执行"
-            test -x /app/vncproxy && echo "  ✓ /app/vncproxy 可执行"
-            test -x /app/entrypoint.sh && echo "  ✓ /app/entrypoint.sh 可执行"
-            test -x /usr/lib/chromium/chromium && echo "  ✓ chromium 存在"
-            test -x /usr/bin/Xvfb && echo "  ✓ Xvfb 存在"
-            test -x /usr/bin/x11vnc && echo "  ✓ x11vnc 存在"
-            /app/seltool -version 2>/dev/null || echo "  （无 -version 参数，跳过）"
+            test -x /app/seltool && echo "  ok /app/seltool"
+            test -x /app/vncproxy && echo "  ok /app/vncproxy"
+            test -x /app/entrypoint.sh && echo "  ok /app/entrypoint.sh"
+            test -x /usr/lib/chromium/chromium && echo "  ok chromium"
+            test -x /usr/bin/Xvfb && echo "  ok Xvfb"
+            test -x /usr/bin/x11vnc && echo "  ok x11vnc"
           '
 
       - name: 7. 冒烟运行
         run: |
           set -eu
-          # 容器内监听 8080（生产 compose 映射 8081:8080），
-          # 且镜像里**没有 wget/curl**，所以从宿主机探测映射端口。
+          # 容器内监听 8080（生产 compose 映射 8081:8080）
+          # 镜像里没有 wget/curl，所以从宿主机探测映射端口
           HOST_PORT=18081
-          NAME=st-smoke-3245937
-          docker run -d --name "" -p :8080 ":" >/dev/null
-          trap 'docker rm -f "" >/dev/null 2>&1 || true' EXIT
+          NAME="st-smoke-$$"
+          docker run -d --name "$NAME" -p "${HOST_PORT}:8080" "$IMAGE:$VERSION" >/dev/null
+          trap 'docker rm -f "$NAME" >/dev/null 2>&1 || true' EXIT
           ok=0
-          for i in 1
-2
-3
-4
-5
-6
-7
-8
-9
-10
-11
-12
-13
-14
-15
-16
-17
-18
-19
-20
-21
-22
-23
-24
-25
-26
-27
-28
-29
-30
-31
-32
-33
-34
-35
-36
-37
-38
-39
-40; do
-            if curl -sf -o /dev/null --max-time 3 "http://127.0.0.1:/login.html"; then
-              echo "第  次探测： 已就绪"
+          for i in $(seq 1 40); do
+            if curl -sf -o /dev/null --max-time 3 "http://127.0.0.1:${HOST_PORT}/login.html"; then
+              echo "第 $i 次探测：${HOST_PORT} 已就绪"
               ok=1
               break
             fi
             sleep 2
           done
-          [ "" = 1 ] || { echo "冒烟失败，容器日志："; docker logs --tail 30 ""; exit 1; }
-          # 顺带确认 noVNC 也在
-          curl -sf -o /dev/null --max-time 3 "http://127.0.0.1:/" || echo "  （根路径非 200，可忽略）"
+          if [ "$ok" != "1" ]; then
+            echo "冒烟失败，容器日志："
+            docker logs --tail 30 "$NAME"
+            exit 1
+          fi
           echo "冒烟通过"
 
       - name: 8. 推送 Registry
