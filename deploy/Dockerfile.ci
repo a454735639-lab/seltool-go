@@ -41,5 +41,9 @@ COPY --from=build /out/seltool /app/seltool
 COPY --from=build /out/vncproxy /app/vncproxy
 COPY deploy/entrypoint.sh /app/entrypoint.sh
 
+# COPY 不保证保留执行位（仓库里 entrypoint.sh 是 644），
+# 缺了会启动即死：[FATAL tini] exec /app/entrypoint.sh failed: Permission denied
+RUN chmod +x /app/seltool /app/vncproxy /app/entrypoint.sh
+
 # 运行时不带 Go 工具链，也不带源码
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]
