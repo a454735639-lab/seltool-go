@@ -7,8 +7,14 @@
 # 基础镜像 seltool-go:runtime-slim2 不在 registry 里，是 NAS 宿主机上的本地镜像。
 # act_runner 的 job 容器共享宿主机 docker daemon，所以 FROM 能直接引用到。
 # 如果哪天这个镜像丢了：sh scripts/build.sh --base 重建。
+#
+# 注意：两个 ARG 都必须写在**第一个 FROM 之前**（全局作用域），
+# 否则不能用于 FROM。写在 FROM 之间属于 stage 内变量，FROM 读不到，
+# 会报 "base name (${RUNTIME_IMAGE}) should not be blank"。
 
 ARG GO_IMAGE=golang:1.26-alpine
+ARG RUNTIME_IMAGE=seltool-go:runtime-slim2
+
 FROM ${GO_IMAGE} AS build
 
 WORKDIR /src
@@ -28,7 +34,6 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/seltool . && \
     ls -lh /out/
 
 
-ARG RUNTIME_IMAGE=seltool-go:runtime-slim2
 FROM ${RUNTIME_IMAGE}
 
 WORKDIR /app
