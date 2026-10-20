@@ -1,8 +1,8 @@
 # 编译产物
-seltool
-vncproxy
-browser-tests
-vnctest
+/seltool
+/vncproxy
+/browser-tests
+/vnctest
 *.test
 *.exe
 
