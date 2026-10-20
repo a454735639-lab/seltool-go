@@ -1,0 +1,40 @@
+# CI 专用：多阶段构建，源码进、镜像出，不需要预先编译二进制。
+#
+# 和 deploy/Dockerfile.f1 的区别：
+#   Dockerfile.f1 假设 seltool / vncproxy 已经编译好放在构建上下文里
+#   （本地 sh scripts/build.sh 的模式），CI 里没有这一步，所以在这里编译。
+#
+# 基础镜像 seltool-go:runtime-slim2 不在 registry 里，是 NAS 宿主机上的本地镜像。
+# act_runner 的 job 容器共享宿主机 docker daemon，所以 FROM 能直接引用到。
+# 如果哪天这个镜像丢了：sh scripts/build.sh --base 重建。
+
+ARG GO_IMAGE=golang:1.26-alpine
+FROM ${GO_IMAGE} AS build
+
+WORKDIR /src
+ENV CGO_ENABLED=0 \
+    GOFLAGS=-mod=mod \
+    GOPROXY=https://goproxy.cn,direct
+
+# 先只拷依赖清单，利用层缓存：源码改动不会触发重新下载依赖
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# -trimpath 去掉本地路径；-s -w 去符号表，二进制小 30% 左右
+RUN go build -trimpath -ldflags="-s -w" -o /out/seltool . && \
+    go build -trimpath -ldflags="-s -w" -o /out/vncproxy ./cmd/vncproxy && \
+    ls -lh /out/
+
+
+ARG RUNTIME_IMAGE=seltool-go:runtime-slim2
+FROM ${RUNTIME_IMAGE}
+
+WORKDIR /app
+COPY --from=build /out/seltool /app/seltool
+COPY --from=build /out/vncproxy /app/vncproxy
+COPY deploy/entrypoint.sh /app/entrypoint.sh
+
+# 运行时不带 Go 工具链，也不带源码
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]
