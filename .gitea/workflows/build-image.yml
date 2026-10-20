@@ -119,17 +119,63 @@ jobs:
       - name: 7. 冒烟运行
         run: |
           set -eu
-          NAME=st-smoke-$$
-          docker run -d --name "$NAME" -p 18081:8081 "$IMAGE:$VERSION" >/dev/null
-          trap 'docker rm -f "$NAME" >/dev/null 2>&1 || true' EXIT
+          # 容器内监听 8080（生产 compose 映射 8081:8080），
+          # 且镜像里**没有 wget/curl**，所以从宿主机探测映射端口。
+          HOST_PORT=18081
+          NAME=st-smoke-3245937
+          docker run -d --name "" -p :8080 ":" >/dev/null
+          trap 'docker rm -f "" >/dev/null 2>&1 || true' EXIT
           ok=0
-          for i in $(seq 1 40); do
-            if docker exec "$NAME" wget -q -O /dev/null --timeout=3 http://127.0.0.1:8081/login.html 2>/dev/null; then
-              echo "第 $i 次探测：8081 已就绪"; ok=1; break
+          for i in 1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40; do
+            if curl -sf -o /dev/null --max-time 3 "http://127.0.0.1:/login.html"; then
+              echo "第  次探测： 已就绪"
+              ok=1
+              break
             fi
             sleep 2
           done
-          [ "$ok" = 1 ] || { echo "冒烟失败，容器日志："; docker logs --tail 30 "$NAME"; exit 1; }
+          [ "" = 1 ] || { echo "冒烟失败，容器日志："; docker logs --tail 30 ""; exit 1; }
+          # 顺带确认 noVNC 也在
+          curl -sf -o /dev/null --max-time 3 "http://127.0.0.1:/" || echo "  （根路径非 200，可忽略）"
           echo "冒烟通过"
 
       - name: 8. 推送 Registry
