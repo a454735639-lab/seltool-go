@@ -27,3 +27,7 @@ compress_icons.py
 .DS_Store
 .idea/
 .vscode/
+
+# Go 构建缓存
+gocache/
+gomodcache/
