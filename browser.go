@@ -511,6 +511,12 @@ func (b *Browser) checkStatus(ctx context.Context, target Target) (bool, string)
 				if strings.Contains(lower, "logout.php") || strings.Contains(lower, "usercp.php") {
 					return true, ""
 				}
+				// SPA 站（如 Rousi Pro）未登录时页面会渲染「登录/注册」入口，
+				// 且标题也叫「首页」，光看标题会误判为已登录。
+				// href="/login" 的按钮 + 登录/注册文字同时命中才算未登录。
+				if strings.Contains(lower, `href="/login"`) && containsAny(lower, ">登录<", ">注册<", ">sign in<", ">sign up<", ">register<") {
+					return false, "登录状态检查失败（页面有登录/注册入口）"
+				}
 			}
 			if title != "" {
 				if containsAny(title, failTitles...) {
