@@ -174,6 +174,16 @@ sh scripts/build.sh --no-deploy
 - 部分站点有 Cloudflare 盾，需要好出口 IP
 - 内存占用随任务增长，任务结束后自动释放页缓存
 
+## 致谢
+
+界面外观与功能设计源自 [linzaixian888/selenium-tool](https://github.com/linzaixian888/selenium-tool)（Java 版）。
+本仓库是独立重写实现（Go + chromedp），未使用其源代码。
+
+通知模板参考了 [MoviePilot](https://github.com/jxxghp/MoviePilot) 的企业微信双模式设计。
+
 ## 许可证
 
 见 [LICENSE](LICENSE)。
+
+**关于上游**：原项目未声明开源许可证，因此本仓库的许可证**不覆盖**其界面设计与命名。
+如果你打算以本仓库为基础对外分发，建议先取得原作者许可，或更换全部视觉资产与名称。
