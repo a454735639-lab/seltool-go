@@ -56,6 +56,58 @@ docker compose up -d
 
 noVNC 实时观看（仅本机）：`http://127.0.0.1:7900`
 
+### 配置文件内容
+
+不想下载模板的话，直接照抄这两份。
+
+****
+
+```yaml
+services:
+  seltool:
+    image: ${IMAGE:?请在 .env 里设置 IMAGE}
+    container_name: seltool-go
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      SE_VNC_PASSWORD: ${SE_VNC_PASSWORD:?请在 .env 里设置 SE_VNC_PASSWORD}
+      VNCPROXY_ALLOWED_HOSTS: ${VNCPROXY_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+      no_proxy: ${NO_PROXY:-localhost,127.0.0.1}
+      SELTOOL_COOKIECLOUD_SYNC_CRON: ${SELTOOL_COOKIECLOUD_SYNC_CRON:-0 0 4 * * *}
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+    ports:
+      - "${HOST_HTTP_PORT:-8081}:8080"
+      - "127.0.0.1:${HOST_VNC_PORT:-7900}:7900"
+```
+
+****
+
+```ini
+IMAGE=ghcr.io/a454735639-lab/seltool-go:latest
+TZ=Asia/Shanghai
+
+HOST_HTTP_PORT=8081
+HOST_VNC_PORT=7900
+
+# 必改
+SE_VNC_PASSWORD=change-me
+
+# 反代或跨机访问 noVNC 时，把域名/IP 加进来
+VNCPROXY_ALLOWED_HOSTS=localhost,127.0.0.1
+
+# Docker daemon 若注入了 HTTP_PROXY，需要排除内网
+NO_PROXY=localhost,127.0.0.1,192.168.0.0/16,172.16.0.0/12,10.0.0.0/8
+
+# CookieCloud 每日同步时间（唯一没有面板入口的项）
+SELTOOL_COOKIECLOUD_SYNC_CRON=0 0 4 * * *
+```
+
+> 端口变量**不要**命名成 `VNC_PORT` / `HTTP_PORT`：容器内 entrypoint 用这两个名字
+> 控制 x11vnc 和 web 监听，注入会把内部端口改乱（表现为 noVNC 打不开）。
+
 ## 配置
 
 分两层，**别混着放**：
