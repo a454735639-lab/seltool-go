@@ -3,7 +3,7 @@
 #
 # 运行位置：NAS 上的 act_runner（容器 act_runner，标签 ubuntu-latest）
 # 触发：push 到 master，或手动 workflow_dispatch
-# 产物：10.0.0.1:3003/gitadmin/seltool-go:<日期-sha> / :latest / :sha-<short>
+# 产物：$REGISTRY/gitadmin/seltool-go:<日期-sha> / :latest / :sha-<short>
 #
 # 只构建和推送镜像，不自动部署。部署由人工决定（见 scripts/promote.sh 说明）。
 #
@@ -26,8 +26,9 @@ on:
   workflow_dispatch:
 
 env:
-  REGISTRY: 10.0.0.1:3003
-  IMAGE: 10.0.0.1:3003/gitadmin/seltool-go
+  # Registry 地址放在仓库变量 REGISTRY 里，避免把内网地址写进代码
+  REGISTRY: ${{ vars.REGISTRY }}
+  IMAGE: ${{ vars.REGISTRY }}/gitadmin/seltool-go
   GITEA_HOST: gitea:3000
   REPO: gitadmin/seltool-go
   RUNTIME_IMAGE: seltool-go:runtime-slim2

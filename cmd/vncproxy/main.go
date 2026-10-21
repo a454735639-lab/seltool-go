@@ -38,8 +38,8 @@ var upgrader = websocket.Upgrader{
 }
 
 // allowedHosts 是从环境变量 VNCPROXY_ALLOWED_HOSTS 读入的额外允许主机名/IP
-// （逗号分隔）。容器场景下，请求的 Host 常是宿主机地址（如 10.0.0.1 或
-// Tailscale 的 10.0.0.2），而容器内网卡只有 Docker 网段，解析不到该地址，
+// （逗号分隔）。容器场景下，请求的 Host 常是宿主机地址或虚拟网地址，
+// 而容器内网卡只有 Docker 网段，解析不到该地址，
 // 会被 isLocalRequestHost 误判为非法。把实际访问地址加进白名单即可。
 var allowedHosts = func() map[string]bool {
 	out := map[string]bool{}

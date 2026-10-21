@@ -10,7 +10,7 @@
 
 set -eu
 
-NAS=${NAS_HOST:-10.0.0.1}
+NAS=${NAS_HOST:?请先设置 NAS_HOST（NAS 的 IP 或主机名）}
 WORK=${NAS_WORK:-/volume1/docker/seltool-f1-work/src}
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 
