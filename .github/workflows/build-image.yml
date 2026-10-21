@@ -11,6 +11,12 @@ name: build-multiarch
 on:
   push:
     branches: [master]
+    # 只改文档不重建镜像（多架构构建要 20 分钟，不值得）
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - "LICENSE"
   workflow_dispatch:
 
 env:
