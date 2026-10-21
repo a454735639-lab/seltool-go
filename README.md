@@ -60,7 +60,7 @@ noVNC 实时观看（仅本机）：`http://127.0.0.1:7900`
 
 不想下载模板的话，直接照抄这两份。
 
-****
+**docker-compose.yml**
 
 ```yaml
 services:
@@ -83,7 +83,7 @@ services:
       - "127.0.0.1:${HOST_VNC_PORT:-7900}:7900"
 ```
 
-****
+**.env**
 
 ```ini
 IMAGE=ghcr.io/a454735639-lab/seltool-go:latest
