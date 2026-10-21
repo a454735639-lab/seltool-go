@@ -316,6 +316,11 @@ func (b *Browser) warmup(target Target, cookies []Cookie, visitURL string, timeo
 	}
 
 	host := hostOf(target.URL)
+	// 预热访问可能已被 Cloudflare 写入 cf_clearance 之类的通行证，
+	// 清 Cookie 前先记录，避免把站点自己发的必要 Cookie 一起抹掉。
+	if names := b.cookieNamesForURL(tabCtx, target.URL); len(names) > 0 {
+		logf("目标 [%s] 清理前浏览器内 Cookie: %v", target.DisplayName(), names)
+	}
 	if err := b.clearCookiesForHost(tabCtx, host); err != nil {
 		logf("清除域名 [%s] 下的旧 Cookie 失败: %v", host, err)
 	}
@@ -336,6 +341,13 @@ func (b *Browser) warmup(target Target, cookies []Cookie, visitURL string, timeo
 		injected++
 	}
 	logf("目标 [%s] 成功注入 %d 个 Cookie（去重前 %d 个）", target.DisplayName(), injected, len(cookies))
+	// document.cookie 看不到 HttpOnly，用 CDP 确认注入是否真的落地。
+	// 之前 Rousi 就是「日志说注入 1 个，页面却是未登录」，靠这条才能分辨是注入失败还是 Cookie 本身失效。
+	if injected > 0 {
+		for _, d := range b.describeCookies(tabCtx, target.URL) {
+			logf("目标 [%s] 注入后 Cookie: %s", target.DisplayName(), d)
+		}
+	}
 
 	for _, item := range target.LocalStorage {
 		if strings.TrimSpace(item.Key) == "" {
@@ -444,6 +456,54 @@ func (b *Browser) deleteCookie(ctx context.Context, ck Cookie) error {
 	}))
 }
 
+// cookieNamesForURL 返回当前对 url 生效的 Cookie 名（用于诊断）。
+func (b *Browser) cookieNamesForURL(ctx context.Context, url string) []string {
+	var names []string
+	_ = b.do(ctx, 8*time.Second, chromedp.Func(func(c context.Context, t *chromedp.Target) error {
+		res, err := cdp.Call(c, t, network.GetCookies, network.GetCookiesParams{URLs: []string{url}})
+		if err != nil {
+			return err
+		}
+		for _, ck := range res.Cookies {
+			names = append(names, ck.Name)
+		}
+		return nil
+	}))
+	return names
+}
+
+// describeCookies 返回当前生效 Cookie 的关键属性（诊断用，不含值）。
+func (b *Browser) describeCookies(ctx context.Context, url string) []string {
+	var out []string
+	_ = b.do(ctx, 8*time.Second, chromedp.Func(func(c context.Context, t *chromedp.Target) error {
+		res, err := cdp.Call(c, t, network.GetCookies, network.GetCookiesParams{URLs: []string{url}})
+		if err != nil {
+			return err
+		}
+		for _, ck := range res.Cookies {
+			out = append(out, fmt.Sprintf("%s domain=%s path=%s secure=%v httpOnly=%v sameSite=%s session=%v",
+				ck.Name, ck.Domain, ck.Path, ck.Secure, ck.HTTPOnly, ck.SameSite, ck.Session))
+		}
+		return nil
+	}))
+	return out
+}
+
+// countBrowserCookies 用 CDP 查询当前浏览器对 url 生效的 Cookie 数量（含 HttpOnly）。
+// document.cookie 读不到 HttpOnly，不能用来判断注入是否成功。
+func (b *Browser) countBrowserCookies(ctx context.Context, url string) int {
+	var n int
+	_ = b.do(ctx, 8*time.Second, chromedp.Func(func(c context.Context, t *chromedp.Target) error {
+		res, err := cdp.Call(c, t, network.GetCookies, network.GetCookiesParams{URLs: []string{url}})
+		if err != nil {
+			return err
+		}
+		n = len(res.Cookies)
+		return nil
+	}))
+	return n
+}
+
 func (b *Browser) addCookieForTarget(ctx context.Context, ck Cookie, targetURL string) error {
 	params, err := cookieParams(ck, targetURL)
 	if err != nil {
@@ -467,7 +527,11 @@ func (b *Browser) classify(target Target, err error) error {
 //  2. NexusPHP 通用标记（logout.php / usercp.php 为已登录，takelogin.php 为未登录）
 //  3. 标题关键字（兼容原版行为）
 func (b *Browser) checkStatus(ctx context.Context, target Target) (bool, string) {
-	deadline := time.Now().Add(25 * time.Second)
+	start := time.Now()
+	deadline := start.Add(25 * time.Second)
+	// SPA 站点首屏是静态壳，hydration 完成后才会换成登录后的界面。
+	// 弱信号（标题「首页」、页面上有登录入口）在壳阶段都会误判，所以要等页面稳定。
+	settle := start.Add(6 * time.Second)
 	var lastTitle string
 	for {
 		title, err := runValue(ctx, 8*time.Second, chromedp.Title())
@@ -514,7 +578,7 @@ func (b *Browser) checkStatus(ctx context.Context, target Target) (bool, string)
 				// SPA 站（如 Rousi Pro）未登录时页面会渲染「登录/注册」入口，
 				// 且标题也叫「首页」，光看标题会误判为已登录。
 				// href="/login" 的按钮 + 登录/注册文字同时命中才算未登录。
-				if strings.Contains(lower, `href="/login"`) && containsAny(lower, ">登录<", ">注册<", ">sign in<", ">sign up<", ">register<") {
+				if time.Now().After(settle) && strings.Contains(lower, `href="/login"`) && containsAny(lower, ">登录<", ">注册<", ">sign in<", ">sign up<", ">register<") {
 					return false, "登录状态检查失败（页面有登录/注册入口）"
 				}
 			}
@@ -522,16 +586,20 @@ func (b *Browser) checkStatus(ctx context.Context, target Target) (bool, string)
 			// 朱雀（TNode）这类 SPA 未登录时标题是「用户登录」能靠关键字命中，
 			// 但换个站标题不一定带「登录」，所以补这条。
 			// 只查可见性，避免误伤「DOM 里藏了个登录弹窗」的站。
-			if hit, err := b.visiblePasswordInput(ctx); err != nil {
+			if !time.Now().After(settle) {
+				// 页面还没稳定，先不判密码框
+			} else if hit, err := b.visiblePasswordInput(ctx); err != nil {
 				logf("目标 [%s] 密码框检测出错: %v", target.DisplayName(), err)
 			} else if hit {
 				return false, "登录状态检查失败（页面有可见的密码输入框）"
 			}
 			if title != "" {
+				// 失败关键字（登录/登錄/2fa）是强信号，立即判
 				if containsAny(title, failTitles...) {
 					return false, "登录状态检查失败（标题命中失败关键字：" + title + "）"
 				}
-				if containsAny(title, successTitles...) {
+				// 「首页」这类成功关键字要等 hydration 完成，否则未登录的 SPA 也会命中
+				if time.Now().After(settle) && containsAny(title, successTitles...) {
 					return true, ""
 				}
 			}

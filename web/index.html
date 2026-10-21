@@ -667,28 +667,32 @@
     // 与后端 notify_format.go 同一套归类规则，卡片上直接说清失败原因
     function failureCategory(message,url){const raw=String(message||'').replace(/^执行失败：/,'');const m=raw.toLowerCase();
       if(!m)return '本次未执行';
-      // Cloudflare 盾必须排在 5xx 之前 —— CF 的 502 是拦截，不是站点故障
-      if(m.includes('cloudflare')||m.includes('ray id')||m.includes('just a moment')||m.includes('checking your browser')||m.includes('challenge')||m.includes('人机')||m.includes('请稍候')||m.includes('cf-mitigated'))return 'CF 盾拦截';
-      if(m.includes('err_cert')||m.includes('x509')||m.includes('certificate')||m.includes('证书'))return '证书失效';
-      if(m.includes('no such host')||m.includes('nxdomain')||m.includes('dns')||m.includes('域名'))return 'DNS 解析失败';
+      if(m.includes('cloudflare')||m.includes('ray id')||m.includes('just a moment')||m.includes('checking your browser')||m.includes('challenge')||m.includes('人机')||m.includes('请稍候')||m.includes('cf-mitigated'))return '被 Cloudflare 拦截';
+      if(m.includes('err_cert')||m.includes('x509')||m.includes('certificate')||m.includes('证书'))return '网站证书失效';
+      const net=(raw.match(/net::(ERR_[A-Z_]+)/)||[])[1]||'';
+      if(net){
+        if(net.includes('NAME_NOT_RESOLVED')||net.includes('NAME_RESOLUTION'))return '域名解析失败';
+        if(net.includes('CONNECTION_CLOSED')||net.includes('CONNECTION_RESET')||net.includes('CONNECTION_REFUSED')||net.includes('ADDRESS_UNREACHABLE'))return '站点拒绝连接';
+        if(net.includes('TIMED_OUT'))return '连接超时';
+        if(net.includes('INTERNET_DISCONNECTED'))return '本机网络断开';
+        if(net.includes('TOO_MANY_REDIRECTS'))return '跳转次数过多';
+        return '站点连不上';
+      }
+      if(m.includes('no such host')||m.includes('nxdomain')||m.includes('dns')||m.includes('域名'))return '域名解析失败';
       if(m.includes('chrome')||m.includes('chromedp')||m.includes('浏览器'))return '浏览器异常';
-      // 页面没渲染出来，比 Cookie 失效更准
-      if(m.includes('等待页面加载超时'))return '页面加载失败';
+      if(m.includes('等待页面加载超时'))return '页面打不开';
       const loginish=m.includes('登录态')||m.includes('未登录')||m.includes('需要登录')||m.includes('登录状态')||m.includes('登录检查')||m.includes('登录页')||m.includes('含登录表单')||m.includes('登录/注册')||m.includes('密码输入框')||m.includes('login');
       if(loginish){
-        // 有 localStorage 凭据的站失败多半是 token 过期，不是 Cookie。
-        // 前端没有全局 targets 变量，直接看这张卡片有没有 storage 行。
-        const card=[...document.querySelectorAll('.target-card')].find(c=>{
-          const u=c.querySelector('[data-f="url"]');return u&&u.value.trim()===url;});
-        if(card&&card.querySelectorAll('[data-f="storage-key"]').length)return 'Token 失效';
-        return 'Cookie 失效';
+        const card=[...document.querySelectorAll('.target-card')].find(c=>{const u=c.querySelector('[data-f="url"]');return u&&u.value.trim()===url;});
+        if(card&&card.querySelectorAll('[data-f="storage-key"]').length)return '登录过期（Token）';
+        return '登录过期（Cookie）';
       }
-      if(m.includes('cookie')&&(m.includes('未找到')||m.includes('缺失')||m.includes('没有')))return 'Cookie 失效';
-      for(const code of ['502','503','504','500'])if(m.includes(code))return '站点故障 '+code;
+      if(m.includes('cookie')&&(m.includes('未找到')||m.includes('缺失')||m.includes('没有')))return '登录过期（Cookie）';
+      for(const code of ['502','503','504','500'])if(m.includes(code))return '站点故障（'+code+'）';
       if(m.includes('timeout')||m.includes('超时'))return '连接超时';
-      if(m.includes('refused')||m.includes('reset')||m.includes('无法连接')||m.includes('连接失败'))return '连接被拒绝';
-      if(m.includes('预热'))return '预热地址失败';
-      if(m.includes('page load')||m.includes('navigation')||m.includes('导航'))return '页面加载失败';
+      if(m.includes('refused')||m.includes('reset')||m.includes('无法连接')||m.includes('连接失败'))return '站点拒绝连接';
+      if(m.includes('预热'))return '站点连不上';
+      if(m.includes('page load')||m.includes('navigation')||m.includes('导航'))return '页面打不开';
       return '其他失败'}
     function needsRelogin(category){return category==='Cookie 缺失'||category==='登录态失效'}
     // ══════ 定时任务 ══════
