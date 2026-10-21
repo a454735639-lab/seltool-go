@@ -3,7 +3,9 @@
 PT 站点保活工具。用无头浏览器定期访问站点，注入 CookieCloud 的登录凭据，
 保持账号活跃；失败按原因分组推送通知。
 
-Go + chromedp 实现，单容器部署，带 Web 面板和 noVNC 实时观看。
+本仓库是 [linzaixian888/selenium-tool](https://github.com/linzaixian888/selenium-tool)
+（Java 17 + Spring Boot + Selenium）的 **Go 重写版**，保留全部用户可见功能，
+未使用其源代码。单容器部署，带 Web 面板和 noVNC 实时观看。
 
 ## 特性
 
