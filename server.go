@@ -940,14 +940,26 @@ func (s *Server) handleSyncMoviePilot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 表单里填了未保存的地址/Token 时优先用表单值（Token 留空则沿用已保存的）
+	// 注意：这里必须一并处理 enabled / cron。之前只取 URL 和 Token，
+	// 用户勾了「每天自动同步」再点同步按钮，开关会被静默丢弃，看着像没生效。
+	body, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<10))
 	var draft MoviePilotSyncConfig
-	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&draft)
+	_ = json.Unmarshal(body, &draft)
+	var present map[string]json.RawMessage
+	_ = json.Unmarshal(body, &present)
+
 	cur := s.mpSync.Current()
 	if strings.TrimSpace(draft.URL) != "" {
 		cur.URL = strings.TrimRight(strings.TrimSpace(draft.URL), "/")
 	}
 	if strings.TrimSpace(draft.Token) != "" {
 		cur.Token = strings.TrimSpace(draft.Token)
+	}
+	if _, ok := present["enabled"]; ok {
+		cur.Enabled = draft.Enabled
+	}
+	if _, ok := present["cron"]; ok && strings.TrimSpace(draft.Cron) != "" {
+		cur.Cron = strings.TrimSpace(draft.Cron)
 	}
 
 	start := time.Now()
