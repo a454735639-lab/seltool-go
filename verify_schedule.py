@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """在 NAS 本机验证定时任务接口全流程。"""
-import json, urllib.request, http.cookiejar
+import json, os, sys, urllib.request, http.cookiejar
 
-B = "http://127.0.0.1:8081"
+# 不要把账号密码写死在脚本里（曾经硬编码过，已从仓库移除）。
+# 用法：SELTOOL_PASSWORD=xxx python3 verify_schedule.py
+B = os.environ.get("SELTOOL_URL", "http://127.0.0.1:8081")
+USER = os.environ.get("SELTOOL_USER", "admin")
+PASSWORD = os.environ.get("SELTOOL_PASSWORD", "")
+if not PASSWORD:
+    sys.exit("请先设置 SELTOOL_PASSWORD 环境变量（面板登录密码）")
 cj = http.cookiejar.CookieJar()
 op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
 
@@ -20,7 +26,7 @@ def req(path, method="GET", body=None, csrf=None, form=None):
 
 st, d = req("/api/auth/status")
 csrf = d["csrfToken"]
-req("/api/auth/login", "POST", csrf=csrf, form="username=admin&password=__REDACTED__")
+req("/api/auth/login", "POST", csrf=csrf, form=f"username={USER}&password={PASSWORD}")
 st, d = req("/api/auth/status")
 csrf = d["csrfToken"]
 
