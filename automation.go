@@ -190,6 +190,68 @@ func (a *Automation) sendTargetTaskNotification(targets []Target, notificationNa
 	a.webhook.Send(status, content)
 }
 
+// isTransientFailure 判断这类失败值不值得批次结束后再试一次。
+// 站点 5xx / 超时 / 连接被拒 / 页面白屏 / 人机验证都可能是一过性的；
+// 登录过期（本轮已刷新过 Cookie）、域名解析失败、证书失效、403 拒绝访问
+// 重试没有意义。
+func isTransientFailure(cat string) bool {
+	switch cat {
+	case "连接超时", "站点拒绝连接", "站点连不上", "页面打不开",
+		"人机验证拦截", "网站协议异常", "跳转次数过多":
+		return true
+	}
+	return strings.HasPrefix(cat, "站点故障")
+}
+
+// retryTransientFailures 在整批跑完后，对瞬时失败的目标各重试一次。
+func (a *Automation) retryTransientFailures(browser *Browser, targets []Target, cookieData map[string][]Cookie) {
+	var retry []Target
+	for _, t := range targets {
+		rec, ok := a.lastFailure(t.URL)
+		if !ok {
+			continue
+		}
+		cat, _ := classifyFailure(t, rec.Message)
+		if !isTransientFailure(cat) {
+			continue
+		}
+		// 域名已经解析不出来（站点关停/换域名），重试只会白等一轮
+		if host := hostOf(t.URL); host != "" && !hostResolves(host) {
+			continue
+		}
+		retry = append(retry, t)
+	}
+	if len(retry) == 0 {
+		return
+	}
+
+	// 上限 10 个：失败太多说明是大面积故障，逐个重试只会拖长任务
+	const retryCap = 10
+	skipped := 0
+	if len(retry) > retryCap {
+		skipped = len(retry) - retryCap
+		retry = retry[:retryCap]
+	}
+
+	const wait = 60 * time.Second
+	logf("发现 %d 个瞬时失败，等待 %d 秒后自动重试一次%s", len(retry), int(wait.Seconds()),
+		func() string {
+			if skipped > 0 {
+				return fmt.Sprintf("（另有 %d 个超出上限未重试）", skipped)
+			}
+			return ""
+		}())
+	time.Sleep(wait)
+
+	for i, t := range retry {
+		logf("自动重试 %d/%d：%s", i+1, len(retry), t.DisplayName())
+		if !a.visitTarget(browser, t, cookieData) {
+			logf("浏览器已关闭，停止自动重试")
+			return
+		}
+	}
+}
+
 func (a *Automation) doExecuteTargets(targets []Target, taskName string) {
 	logf("开始执行%s，共 %d 个目标", taskName, len(targets))
 
@@ -240,6 +302,9 @@ func (a *Automation) doExecuteTargets(targets []Target, taskName string) {
 		}
 	}
 	if !interrupted {
+		// 批次里偶尔会碰到站点瞬时 5xx / 超时：同一个站过一两分钟单独访问又好了。
+		// 这里统一再试一次，避免「批量失败、单跑成功」的困惑。
+		a.retryTransientFailures(browser, targets, cookieData)
 		a.closeBrowser()
 	}
 	logf("%s执行结束", taskName)

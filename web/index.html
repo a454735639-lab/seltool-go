@@ -690,6 +690,7 @@
       }
       if(m.includes('no such host')||m.includes('nxdomain')||m.includes('dns')||m.includes('域名'))return '域名解析失败';
       if(m.includes('chrome')||m.includes('chromedp')||m.includes('浏览器'))return '浏览器异常';
+      if(m.includes('403')&&m.includes('forbidden'))return '访问被拒绝（403）';
       if(m.includes('等待页面加载超时'))return '页面打不开';
       const loginish=m.includes('登录态')||m.includes('未登录')||m.includes('需要登录')||m.includes('登录状态')||m.includes('登录检查')||m.includes('登录页')||m.includes('含登录表单')||m.includes('登录/注册')||m.includes('密码输入框')||m.includes('login');
       if(loginish){

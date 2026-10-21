@@ -124,6 +124,11 @@ func classifyFailure(t Target, message string) (category, detail string) {
 		return "站点故障（" + g[1] + "）", "站点服务器报错"
 	}
 
+	// 403 是站点明确拒绝（IP / UA 被判成异常），重试没用，单独归类
+	if strings.Contains(m, "403") && strings.Contains(m, "forbidden") {
+		return "访问被拒绝（403）", "站点判定为异常访问"
+	}
+
 	if strings.Contains(m, "等待页面加载超时") {
 		return "页面打不开", "页面白屏或加载不动"
 	}
