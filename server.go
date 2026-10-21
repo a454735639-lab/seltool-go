@@ -469,17 +469,46 @@ func (s *Server) handleCandidates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	domains := detectPTSites(data)
+
+	// 标出哪些已经在目标列表里：全都在时不该只显示「未识别到 PT 站」，
+	// 那会让人以为识别功能坏了。
+	seenReg := map[string]bool{}
+	if s.targets != nil {
+		for _, t := range s.targets.Get() {
+			if reg := registeredDomain(t.URL); reg != "" {
+				seenReg[reg] = true
+			}
+		}
+	}
+	type candidate struct {
+		Domain string `json:"domain"`
+		Name   string `json:"name"`
+		Exists bool   `json:"exists"`
+	}
+	list := make([]candidate, 0, len(domains))
+	fresh := 0
+	for _, d := range domains {
+		host := normalizeDomain(d)
+		exists := seenReg[registeredDomain(host)]
+		if !exists {
+			fresh++
+		}
+		list = append(list, candidate{Domain: host, Name: siteDisplayName(host), Exists: exists})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"domains": domains,
-		"total":   len(domains),
+		"candidates": list,
+		"total":      len(list),
+		"fresh":      fresh,
 	})
 }
 
 // handleImportTargets 支持两种来源：mode=auto 从 CookieCloud 识别，mode=manual 解析粘贴文本。
 func (s *Server) handleImportTargets(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Mode  string `json:"mode"`
-		Input string `json:"input"`
+		Mode      string   `json:"mode"`
+		Input     string   `json:"input"`
+		Domains   []string `json:"domains"`
+		Overwrite bool     `json:"overwrite"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求格式错误"})
@@ -489,6 +518,10 @@ func (s *Server) handleImportTargets(w http.ResponseWriter, r *http.Request) {
 	var incoming []Target
 	switch body.Mode {
 	case "auto":
+		if len(body.Domains) > 0 {
+			incoming = targetsFromDomains(body.Domains)
+			break
+		}
 		data, err := s.cookies.FetchAllCookies()
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "CookieCloud 获取失败：" + err.Error()})
@@ -513,7 +546,7 @@ func (s *Server) handleImportTargets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	existing := s.targets.Get()
-	added, skipped := mergeTargets(incoming, existing)
+	added, updated, skipped := mergeTargetsOverwrite(incoming, existing, body.Overwrite)
 	merged := append(existing, added...)
 	saved, err := s.targets.Save(merged)
 	if err != nil {
@@ -525,12 +558,17 @@ func (s *Server) handleImportTargets(w http.ResponseWriter, r *http.Request) {
 	for _, t := range added {
 		names = append(names, t.Name)
 	}
+	msg := fmt.Sprintf("已导入 %d 个目标，跳过 %d 个已存在的", len(added), skipped)
+	if updated > 0 {
+		msg = fmt.Sprintf("已导入 %d 个，更新 %d 个，跳过 %d 个", len(added), updated, skipped)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"imported": len(added),
+		"updated":  updated,
 		"skipped":  skipped,
 		"total":    len(saved),
 		"names":    names,
-		"message":  fmt.Sprintf("已导入 %d 个目标，跳过 %d 个已存在的", len(added), skipped),
+		"message":  msg,
 	})
 }
 
@@ -539,6 +577,102 @@ func (s *Server) handleImportTargets(w http.ResponseWriter, r *http.Request) {
 // 去重键用 canonicalURLKey（host + 路径，忽略末尾斜杠），并额外按 host 精确匹配，
 // 这样「同一站带不带末尾斜杠」「导入两次」都不会产生重复。
 // 注意 www 与 apex 仍视为不同 host —— 两者 Cookie 域不同，合并会丢登录态。
+
+// targetsFromDomains 把域名列表直接转成目标（不做去重，交给合并阶段处理）。
+func targetsFromDomains(domains []string) []Target {
+	out := make([]Target, 0, len(domains))
+	for _, d := range domains {
+		host := normalizeDomain(d)
+		if host == "" || registeredDomain(host) == "" {
+			continue
+		}
+		out = append(out, Target{
+			Name:         siteDisplayName(host),
+			URL:          "https://" + host + "/",
+			WarmupPath:   "/favicon.ico",
+			LocalStorage: []LocalStorage{},
+		})
+	}
+	return out
+}
+
+// mergeTargetsOverwrite 在 mergeTargets 基础上支持「重复时覆盖」。
+// 覆盖只更新显示名，不改 URL —— 已有目标可能带签到路径（如 /attendance.php），
+// 改 URL 会把用户配好的路径冲掉。
+func mergeTargetsOverwrite(incoming, existing []Target, overwrite bool) (added []Target, updated, skipped int) {
+	seenKey := map[string]bool{}
+	regIdx := map[string]int{}
+	hostIdx := map[string]int{}
+	for i, t := range existing {
+		raw := strings.TrimSpace(t.URL)
+		if raw == "" {
+			continue
+		}
+		seenKey[canonicalURLKey(raw)] = true
+		if reg := registeredDomain(raw); reg != "" {
+			if _, ok := regIdx[reg]; !ok {
+				regIdx[reg] = i
+			}
+		}
+		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+			hostIdx[strings.ToLower(u.Hostname())] = i
+		}
+	}
+	apply := func(i int, t Target) bool {
+		if !overwrite {
+			return false
+		}
+		if n := strings.TrimSpace(t.Name); n != "" && existing[i].Name != n {
+			existing[i].Name = n
+			return true
+		}
+		return false
+	}
+	for _, t := range incoming {
+		raw := strings.TrimSpace(t.URL)
+		if raw == "" {
+			skipped++
+			continue
+		}
+		if seenKey[canonicalURLKey(raw)] {
+			if i, ok := regIdx[registeredDomain(raw)]; ok && apply(i, t) {
+				updated++
+			} else {
+				skipped++
+			}
+			continue
+		}
+		host := ""
+		if u, err := url.Parse(raw); err == nil {
+			host = strings.ToLower(u.Hostname())
+		}
+		if i, ok := hostIdx[host]; ok && host != "" {
+			if apply(i, t) {
+				updated++
+			} else {
+				skipped++
+			}
+			continue
+		}
+		if reg := registeredDomain(raw); reg != "" {
+			if i, ok := regIdx[reg]; ok {
+				if apply(i, t) {
+					updated++
+				} else {
+					skipped++
+				}
+				continue
+			}
+		}
+		seenKey[canonicalURLKey(raw)] = true
+		if host != "" {
+			hostIdx[host] = len(existing) + len(added)
+		}
+		added = append(added, t)
+	}
+	return added, updated, skipped
+}
+
 func mergeTargets(incoming, existing []Target) (added []Target, skipped int) {
 	seenKey := map[string]bool{}
 	seenHost := map[string]bool{}
