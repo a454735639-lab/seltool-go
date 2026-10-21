@@ -118,6 +118,10 @@ func classifyFailure(t Target, message string) (category, detail string) {
 		return "浏览器异常", "浏览器启动或执行失败"
 	}
 
+	if g := httpCodeRe.FindStringSubmatch(raw); len(g) > 1 {
+		return "站点故障（" + g[1] + "）", "站点服务器报错"
+	}
+
 	if strings.Contains(m, "等待页面加载超时") {
 		return "页面打不开", "页面白屏或加载不动"
 	}
@@ -137,10 +141,6 @@ func classifyFailure(t Target, message string) (category, detail string) {
 	if strings.Contains(m, "cookie") && (strings.Contains(m, "未找到") ||
 		strings.Contains(m, "缺失") || strings.Contains(m, "没有")) {
 		return "登录过期（Cookie）", "CookieCloud 里没有这个站的记录"
-	}
-
-	if g := httpCodeRe.FindStringSubmatch(raw); len(g) > 1 {
-		return "站点故障（" + g[1] + "）", "站点服务器报错"
 	}
 
 	if strings.Contains(m, "timeout") || strings.Contains(m, "超时") {
