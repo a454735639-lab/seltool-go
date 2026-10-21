@@ -1,8 +1,10 @@
 # 多架构镜像：GitHub Actions 用 buildx 一次出 amd64 + arm64。
 #
-# 和 deploy/Dockerfile.ci 的区别：那个依赖本地的 seltool-go:runtime-slim2
-# 基础镜像（NAS 上手工构建的），GitHub runner 上没有。这里直接从
-# debian:bookworm-slim 装浏览器和 VNC，构建过程完全自包含。
+# 体积优化（对齐本地 660MB 那版的做法）：
+#   - 中文字体用 wqy-microhei（5MB）而不是 noto-cjk（108MB）
+#   - 删 libLLVM / libz3 / mesa dri / ghostscript（--disable-gpu 用不到，实测安全）
+#   - 删文档、man、locale、apt 缓存
+#   - 构建末尾跑一次 chromium --version，删过头会直接构建失败
 
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 
@@ -31,8 +33,6 @@ ENV DISPLAY=:99 \
     SELTOOL_CHROME_BIN=/usr/bin/chromium \
     DEBIAN_FRONTEND=noninteractive
 
-# chromium 用于执行站点任务，Xvfb/x11vnc/fluxbox 用于 noVNC 观看，
-# tini 做 1 号进程，中文字体保证页面不乱码。
 RUN apt-get update && apt-get install -y --no-install-recommends \
       chromium \
       xvfb \
@@ -40,22 +40,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       fluxbox \
       tini \
       ca-certificates \
-      fonts-noto-cjk \
+      fonts-wqy-microhei \
       xdotool \
       wmctrl \
-      procps \
-    && rm -rf /var/lib/apt/lists/*
+      curl \
+    && rm -rf /var/lib/apt/lists/* \
+    # ---- 文档与本地化 ----
+    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/* \
+    # ---- GPU / 打印相关：--disable-gpu，用不到 ----
+    && rm -f /usr/lib/*/libLLVM-*.so* /usr/lib/*/libz3.so* \
+    && rm -f /usr/lib/*/libgs.so* /usr/lib/*/libgs*.so* \
+    && rm -rf /usr/lib/*/dri \
+    # ---- chromium 翻译只留中英 ----
+    && find /usr/lib/chromium/locales -type f \
+         ! -name 'en-US.pak' ! -name 'zh-CN.pak' ! -name 'zh-TW.pak' -delete 2>/dev/null || true
 
 # noVNC 静态文件：vncproxy 只是 http.FileServer(/usr/share/novnc)，
-# 目录不存在会直接 404。不用 apt 的 novnc 包（会拖进 python/websockify），
-# 直接取官方发布包，只有静态资源。
+# 目录不存在会 404。取官方发布包，不装 apt 的 novnc（会带 python）。
 ARG NOVNC_VERSION=1.5.0
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
-    && curl -fsSL "https://github.com/novnc/noVNC/archive/refs/tags/v${NOVNC_VERSION}.tar.gz" \
-       | tar -xz -C /usr/share \
+RUN curl -fsSL "https://github.com/novnc/noVNC/archive/refs/tags/v${NOVNC_VERSION}.tar.gz" \
+      | tar -xz -C /usr/share \
     && mv "/usr/share/noVNC-${NOVNC_VERSION}" /usr/share/novnc \
-    && rm -rf /var/lib/apt/lists/* /usr/share/novnc/docs /usr/share/novnc/tests \
+    && rm -rf /usr/share/novnc/docs /usr/share/novnc/tests \
     && test -f /usr/share/novnc/vnc.html
 
 WORKDIR /app
@@ -64,7 +70,9 @@ COPY --from=build /out/seltool /app/seltool
 COPY --from=build /out/vncproxy /app/vncproxy
 COPY deploy/entrypoint.sh /app/entrypoint.sh
 
-# COPY 不保证保留执行位，缺了会启动即死
-RUN chmod +x /app/seltool /app/vncproxy /app/entrypoint.sh
+RUN chmod +x /app/seltool /app/vncproxy /app/entrypoint.sh \
+    # 删过头会在这里暴露：chromium 起不来就构建失败
+    && chromium --version \
+    && test -x /usr/bin/Xvfb && test -x /usr/bin/x11vnc && test -x /usr/bin/fluxbox && test -x /usr/bin/tini
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]
