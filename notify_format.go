@@ -18,53 +18,152 @@ const (
 	markEnd  = "[[/]]"
 )
 
-// failureCategory 把原始失败信息归类成一眼能懂的原因；无法归类时返回空串。
-func failureCategory(message string) string {
-	m := strings.ToLower(strings.TrimSpace(message))
-	switch {
-	case m == "":
-		return "无运行记录"
-	case strings.Contains(m, "chrome"), strings.Contains(m, "浏览器"), strings.Contains(m, "chromedp"):
-		return "浏览器异常"
-	case strings.Contains(m, "cookie") && (strings.Contains(m, "未找到") || strings.Contains(m, "缺失") || strings.Contains(m, "没有")):
-		return "Cookie 缺失"
-	case strings.Contains(m, "登录态"), strings.Contains(m, "未登录"), strings.Contains(m, "需要登录"), strings.Contains(m, "login"):
-		return "登录态失效"
-	case strings.Contains(m, "证书"), strings.Contains(m, "certificate"), strings.Contains(m, "x509"), strings.Contains(m, "tls"):
-		return "证书问题"
-	case strings.Contains(m, "cloudflare"), strings.Contains(m, "challenge"), strings.Contains(m, "人机"), strings.Contains(m, "拦截"):
-		return "被站点拦截"
-	case strings.Contains(m, "502"):
-		return "站点故障 502"
-	case strings.Contains(m, "503"):
-		return "站点故障 503"
-	case strings.Contains(m, "504"):
-		return "站点故障 504"
-	case strings.Contains(m, "500"):
-		return "站点故障 500"
-	case strings.Contains(m, "域名"), strings.Contains(m, "no such host"), strings.Contains(m, "dns"):
-		return "域名解析失败"
-	case strings.Contains(m, "timeout"), strings.Contains(m, "超时"):
-		return "连接超时"
-	case strings.Contains(m, "refused"), strings.Contains(m, "reset"), strings.Contains(m, "无法连接"), strings.Contains(m, "连接失败"):
-		return "无法连接"
-	case strings.Contains(m, "预热"):
-		return "预热地址失败"
-	case strings.Contains(m, "登录状态") || strings.Contains(m, "登录检查"):
-		return "需重新登录"
-	case strings.Contains(m, "登录页") || strings.Contains(m, "含登录表单"):
-		return "需重新登录"
-	case strings.Contains(m, "page load"), strings.Contains(m, "navigation"), strings.Contains(m, "导航"):
-		return "页面加载失败"
-	case strings.Contains(m, "目标未生成"), strings.Contains(m, "没有运行记录"):
-		return "本次未执行"
+var (
+	rayIDRe    = regexp.MustCompile(`(?i)ray\s*id[:\s]+([0-9a-f]{8,})`)
+	certErrRe  = regexp.MustCompile(`(ERR_CERT_[A-Z_]+)`)
+	netErrRe   = regexp.MustCompile(`net::(ERR_[A-Z_]+)`)
+	httpCodeRe = regexp.MustCompile(`\b(5[0-9]{2})\b`)
+	titleRe    = regexp.MustCompile(`标题[：:]\s*([^）)]*)`)
+)
+
+// primaryCredentialKey 返回目标维持登录态用的主凭据键名（localStorage 里的 token/auth 等）。
+func primaryCredentialKey(t Target) string {
+	for _, kv := range t.LocalStorage {
+		k := strings.ToLower(kv.Key)
+		if strings.Contains(k, "token") || strings.Contains(k, "auth") ||
+			strings.Contains(k, "jwt") || strings.Contains(k, "session") {
+			return kv.Key
+		}
+	}
+	if len(t.LocalStorage) > 0 {
+		return t.LocalStorage[0].Key
 	}
 	return ""
 }
 
+// netDetail 从报错里抽出 Chromium 的网络错误码，没有就返回空串。
+func netDetail(raw string) string {
+	if g := netErrRe.FindStringSubmatch(raw); len(g) > 1 {
+		return g[1]
+	}
+	return ""
+}
+
+// classifyFailure 把原始失败信息归类成具体、可操作的原因，并给出细节。
+// 判定顺序从「最具体」到「最笼统」，先命中先返回。
+//
+// 关键：Token 失效和 Cookie 失效的处理动作完全不同
+//
+//	Cookie → 同步 CookieCloud
+//	Token  → 去站点手动抓 localStorage
+//
+// 所以必须结合目标自身的凭据配置来分类，不能只看报错文本。
+func classifyFailure(t Target, message string) (category, detail string) {
+	raw := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(message), "执行失败："))
+	m := strings.ToLower(raw)
+
+	if m == "" || strings.Contains(m, "目标未生成") || strings.Contains(m, "没有运行记录") {
+		return "本次未执行", ""
+	}
+
+	// Cloudflare 盾：必须排在 5xx 之前 —— CF 的 502 是拦截，不是站点故障
+	if strings.Contains(m, "cloudflare") || strings.Contains(m, "ray id") ||
+		strings.Contains(m, "just a moment") || strings.Contains(m, "checking your browser") ||
+		strings.Contains(m, "challenge") || strings.Contains(m, "人机") ||
+		strings.Contains(m, "请稍候") || strings.Contains(m, "cf-mitigated") {
+		d := "盾拦截"
+		if g := rayIDRe.FindStringSubmatch(raw); len(g) > 1 {
+			d = "Ray ID " + g[1][:8]
+		} else if strings.Contains(m, "请稍候") {
+			d = "标题「请稍候…」"
+		} else if strings.Contains(m, "just a moment") {
+			d = "标题「Just a moment…」"
+		} else if strings.Contains(m, "challenge") || strings.Contains(m, "人机") {
+			d = "人机验证页"
+		}
+		if g := httpCodeRe.FindStringSubmatch(raw); len(g) > 1 {
+			d += " · HTTP " + g[1]
+		}
+		return "CF 盾拦截", d
+	}
+
+	if strings.Contains(m, "err_cert") || strings.Contains(m, "x509") ||
+		strings.Contains(m, "certificate") || strings.Contains(m, "证书") {
+		d := "证书无效"
+		if g := certErrRe.FindStringSubmatch(raw); len(g) > 1 {
+			d = g[1]
+		}
+		return "证书失效", d
+	}
+
+	if strings.Contains(m, "no such host") || strings.Contains(m, "nxdomain") ||
+		strings.Contains(m, "dns") || strings.Contains(m, "域名") {
+		return "DNS 解析失败", netDetail(raw)
+	}
+
+	if strings.Contains(m, "chrome") || strings.Contains(m, "chromedp") || strings.Contains(m, "浏览器") {
+		return "浏览器异常", truncateRunes(raw, 40)
+	}
+
+	// 「登录状态检查失败（等待页面加载超时）」其实是页面没渲染出来，
+	// 归到页面加载失败比 Cookie 失效更准，也更能提示去查站点状态。
+	if strings.Contains(m, "等待页面加载超时") {
+		d := "页面未渲染完成"
+		if g := titleRe.FindStringSubmatch(raw); len(g) > 1 && strings.TrimSpace(g[1]) != "" {
+			d = "标题：" + truncateRunes(strings.TrimSpace(g[1]), 30)
+		}
+		return "页面加载失败", d
+	}
+
+	// 登录类失败：先看目标自己用什么凭据
+	loginish := strings.Contains(m, "登录态") || strings.Contains(m, "未登录") ||
+		strings.Contains(m, "需要登录") || strings.Contains(m, "登录状态") ||
+		strings.Contains(m, "登录检查") || strings.Contains(m, "登录页") ||
+		strings.Contains(m, "含登录表单") || strings.Contains(m, "登录/注册") ||
+		strings.Contains(m, "密码输入框") || strings.Contains(m, "login")
+	if loginish {
+		if key := primaryCredentialKey(t); key != "" {
+			return "Token 失效", "凭据 " + key
+		}
+		return "Cookie 失效", ""
+	}
+
+	if strings.Contains(m, "cookie") && (strings.Contains(m, "未找到") ||
+		strings.Contains(m, "缺失") || strings.Contains(m, "没有")) {
+		return "Cookie 失效", ""
+	}
+
+	if g := httpCodeRe.FindStringSubmatch(raw); len(g) > 1 {
+		return "站点故障 " + g[1], netDetail(raw)
+	}
+
+	if strings.Contains(m, "timeout") || strings.Contains(m, "超时") {
+		return "连接超时", netDetail(raw)
+	}
+
+	if strings.Contains(m, "refused") || strings.Contains(m, "reset") ||
+		strings.Contains(m, "无法连接") || strings.Contains(m, "连接失败") {
+		return "连接被拒绝", netDetail(raw)
+	}
+
+	if strings.Contains(m, "预热") {
+		return "预热地址失败", netDetail(raw)
+	}
+
+	if strings.Contains(m, "page load") || strings.Contains(m, "navigation") || strings.Contains(m, "导航") {
+		return "页面加载失败", netDetail(raw)
+	}
+
+	return "", ""
+}
+
 // needsRelogin 判断这条失败是否需要人工重新登录。
 func needsRelogin(category string) bool {
-	return category == "Cookie 缺失" || category == "登录态失效" || category == "需重新登录"
+	switch category {
+	case "Cookie 失效", "Token 失效", "登录态失效", "需重新登录":
+		return true
+	}
+	return false
 }
 
 // failureStreak 从最近一条往前数连续失败次数，并返回最近一次成功时间。
@@ -138,12 +237,14 @@ func categoryRank(cat string) int {
 	switch {
 	case needsRelogin(cat):
 		return 0
-	case strings.HasPrefix(cat, "站点故障"), cat == "被站点拦截", cat == "证书问题":
+	case cat == "CF 盾拦截", cat == "证书失效":
 		return 1
-	case cat == "域名解析失败", cat == "预热地址失败", cat == "页面加载失败":
+	case strings.HasPrefix(cat, "站点故障"), cat == "DNS 解析失败":
 		return 2
-	default:
+	case cat == "连接超时", cat == "连接被拒绝", cat == "预热地址失败", cat == "页面加载失败":
 		return 3
+	default:
+		return 4
 	}
 }
 
@@ -156,7 +257,7 @@ func buildFailureGroups(failed []Target, latest, previous map[string]RunRecord, 
 		if ok {
 			reason = record.Message
 		}
-		cat := failureCategory(reason)
+		cat, detail := classifyFailure(t, reason)
 		if cat == "" {
 			cat = truncateRunes(strings.TrimPrefix(strings.TrimSpace(reason), "执行失败："), 14)
 		}
@@ -171,7 +272,7 @@ func buildFailureGroups(failed []Target, latest, previous map[string]RunRecord, 
 			url:     strings.TrimSpace(t.URL),
 			streak:  streak,
 			lastOK:  lastOK,
-			rawNote: truncateRunes(strings.TrimPrefix(strings.TrimSpace(reason), "执行失败："), 60),
+			rawNote: detail,
 		})
 	}
 
@@ -229,7 +330,7 @@ func buildTaskMessage(notificationName string, targets []Target, failed []Target
 	}
 
 	// ── 第 3 段：失败分组 ──
-	var actionable []string
+	var cookieItems, tokenItems []string
 	if len(failed) > 0 {
 		groups := buildFailureGroups(failed, latest, previous, recordsOf)
 		fmt.Fprintf(&b, "\n\n%s失败 %d 个，按原因分组%s", markDim, len(failed), markEnd)
@@ -240,7 +341,11 @@ func buildTaskMessage(notificationName string, targets []Target, failed []Target
 			if g.actionable {
 				head += " " + markWarn + "[需重登]" + markEnd
 				for _, it := range g.items {
-					actionable = append(actionable, it.name)
+					if g.category == "Token 失效" {
+						tokenItems = append(tokenItems, it.name)
+					} else {
+						cookieItems = append(cookieItems, it.name)
+					}
 				}
 			}
 			fmt.Fprintf(&b, "\n\n**%s**", head)
@@ -253,8 +358,9 @@ func buildTaskMessage(notificationName string, targets []Target, failed []Target
 				line += streakSuffix(it.streak, it.lastOK)
 				fmt.Fprintf(&b, "\n%s", line)
 
-				// 只对「非重登类」补一行原始报错——重登类原因已足够明确
-				if !g.actionable && it.rawNote != "" && it.rawNote != g.category {
+				// 细节行：Token 失效会显示「凭据 token」，
+				// CF 盾显示 Ray ID，证书显示 ERR_CERT_*，网络类显示 ERR_* 码。
+				if it.rawNote != "" && it.rawNote != g.category {
 					fmt.Fprintf(&b, "\n  %s%s%s", markDim, truncateRunes(it.rawNote, 52), markEnd)
 				}
 			}
@@ -266,9 +372,14 @@ func buildTaskMessage(notificationName string, targets []Target, failed []Target
 	// 只有全部成功时才给一行确认，避免"什么都没收到"的疑虑。
 
 	// ── 第 5 段：行动项 ──
-	if len(actionable) > 0 {
-		fmt.Fprintf(&b, "\n\n%s▸ 需处理：%s 需要重新登录并同步 Cookie%s",
-			markWarn, strings.Join(actionable, "、"), markEnd)
+	if len(cookieItems)+len(tokenItems) > 0 {
+		fmt.Fprintf(&b, "\n\n%s▸ 需处理%s", markWarn, markEnd)
+		if len(cookieItems) > 0 {
+			fmt.Fprintf(&b, "\n  Cookie 失效：%s\n    → 同步 CookieCloud", strings.Join(cookieItems, "、"))
+		}
+		if len(tokenItems) > 0 {
+			fmt.Fprintf(&b, "\n  Token 失效：%s\n    → 到站点重新抓 localStorage 凭据", strings.Join(tokenItems, "、"))
+		}
 	}
 	return b.String()
 }

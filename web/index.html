@@ -665,24 +665,29 @@
     async function logout(){const response=await apiFetch('/api/auth/logout',{method:'POST'});if(!response.ok)throw Error('退出登录失败');location.replace('/login.html')}
     function targetStatus(url){const record=latestHistories[url];return record?(record.success?'success':'failure'):'unrun'}
     // 与后端 notify_format.go 同一套归类规则，卡片上直接说清失败原因
-    function failureCategory(message){const m=String(message||'').toLowerCase();
-      if(!m)return '无运行记录';
-      if(m.includes('chrome')||m.includes('浏览器')||m.includes('chromedp'))return '浏览器异常';
-      if(m.includes('cookie')&&(m.includes('未找到')||m.includes('缺失')||m.includes('没有')))return 'Cookie 缺失';
-      if(m.includes('登录态')||m.includes('未登录')||m.includes('需要登录')||m.includes('login'))return '登录态失效';
-      if(m.includes('证书')||m.includes('certificate')||m.includes('x509')||m.includes('tls'))return '证书问题';
-      if(m.includes('cloudflare')||m.includes('challenge')||m.includes('人机')||m.includes('拦截'))return '被站点拦截';
-      for(const code of ['502','503','504','500']){if(m.includes(code))return '站点故障 '+code}
-      if(m.includes('域名')||m.includes('no such host')||m.includes('dns'))return '域名解析失败';
+    function failureCategory(message,url){const raw=String(message||'').replace(/^执行失败：/,'');const m=raw.toLowerCase();
+      if(!m)return '本次未执行';
+      // Cloudflare 盾必须排在 5xx 之前 —— CF 的 502 是拦截，不是站点故障
+      if(m.includes('cloudflare')||m.includes('ray id')||m.includes('just a moment')||m.includes('checking your browser')||m.includes('challenge')||m.includes('人机')||m.includes('请稍候')||m.includes('cf-mitigated'))return 'CF 盾拦截';
+      if(m.includes('err_cert')||m.includes('x509')||m.includes('certificate')||m.includes('证书'))return '证书失效';
+      if(m.includes('no such host')||m.includes('nxdomain')||m.includes('dns')||m.includes('域名'))return 'DNS 解析失败';
+      if(m.includes('chrome')||m.includes('chromedp')||m.includes('浏览器'))return '浏览器异常';
+      // 页面没渲染出来，比 Cookie 失效更准
+      if(m.includes('等待页面加载超时'))return '页面加载失败';
+      const loginish=m.includes('登录态')||m.includes('未登录')||m.includes('需要登录')||m.includes('登录状态')||m.includes('登录检查')||m.includes('登录页')||m.includes('含登录表单')||m.includes('登录/注册')||m.includes('密码输入框')||m.includes('login');
+      if(loginish){
+        // 有 localStorage 凭据的站失败多半是 token 过期，不是 Cookie
+        const t=(Array.isArray(targets)?targets:[]).find(x=>x&&x.url===url);
+        if(t&&Array.isArray(t.localStorage)&&t.localStorage.length)return 'Token 失效';
+        return 'Cookie 失效';
+      }
+      if(m.includes('cookie')&&(m.includes('未找到')||m.includes('缺失')||m.includes('没有')))return 'Cookie 失效';
+      for(const code of ['502','503','504','500'])if(m.includes(code))return '站点故障 '+code;
       if(m.includes('timeout')||m.includes('超时'))return '连接超时';
-      if(m.includes('refused')||m.includes('reset')||m.includes('无法连接')||m.includes('连接失败'))return '无法连接';
+      if(m.includes('refused')||m.includes('reset')||m.includes('无法连接')||m.includes('连接失败'))return '连接被拒绝';
       if(m.includes('预热'))return '预热地址失败';
-      if(m.includes('登录状态')||m.includes('登录检查'))return '需重新登录';
-      if(m.includes('登录页')||m.includes('含登录表单'))return '需重新登录';
       if(m.includes('page load')||m.includes('navigation')||m.includes('导航'))return '页面加载失败';
-      if(m.includes('目标未生成')||m.includes('没有运行记录'))return '本次未执行';
-      const t=String(message||'').trim().replace(/^执行失败[：:]\s*/,'');
-      return t.length>12?t.slice(0,12)+'…':(t||'失败')}
+      return '其他失败'}
     function needsRelogin(category){return category==='Cookie 缺失'||category==='登录态失效'}
     // ══════ 定时任务 ══════
     let schPresets=[],schZones=[];
@@ -888,7 +893,7 @@
     function statusBadge(url){const record=latestHistories[url];
       if(!record)return '<button type="button" class="latest-status none" title="点击单独重试" onclick="retryStatusBadge(event,this)">未运行</button>';
       const when=esc(formatHistoryTime(record.executedAt));
-      if(!record.success){const cat=failureCategory(record.message);const tip=when+' · '+cat+(record.message?'（'+record.message+'）':'')+' · 点击单独重试';
+      if(!record.success){const cat=failureCategory(record.message,url);const tip=when+' · '+cat+(record.message?'（'+record.message+'）':'')+' · 点击单独重试';
         return '<button type="button" class="latest-status failure'+(needsRelogin(cat)?' action-needed':'')+'" title="'+esc(tip)+'" onclick="retryStatusBadge(event,this)">'+esc(cat)+'</button>';}
       return '<span class="latest-status success" title="'+esc(when+' · '+(record.message||''))+'">最近成功</span>'}
     function shortWhen(rfc){const raw=String(rfc||'');const m=raw.match(/(\d{4})[-/](\d{2})[-/](\d{2})[T ](\d{2}):(\d{2})/);
@@ -896,7 +901,7 @@
       return m2?m2[2]+'-'+m2[1]+' '+m2[4]:f}
     function statusTime(url){const record=latestHistories[url];if(!record)return '<span class="card-time">未运行</span>';
       // 失败时把归类原因直接写在时间后面：手机上没有 tooltip，悬停看不全。
-      if(!record.success){const cat=failureCategory(record.message);
+      if(!record.success){const cat=failureCategory(record.message,url);
         return '<span class="card-time card-time--fail">'+esc(shortWhen(record.executedAt))+' · '+esc(cat)+'</span>'}
       return '<span class="card-time">'+esc(shortWhen(record.executedAt))+'</span>'}
     function render(items){root.innerHTML='';items.map((t,i)=>({t,number:i+1})).reverse().forEach(({t,number})=>{const e=document.createElement('details'),locked=!!t.templateId,readonly=locked?' readonly':'',storageItems=t.localStorage||[],storageHtml=locked&&!storageItems.length?'':'<details class="storage"><summary>localStorage（'+storageItems.length+' 项'+(locked?'，value 必填':'')+'）</summary><div class="storage-items">'+storageItems.map(item=>storageRow(item,locked)).join('')+'</div>'+(locked?'':'<button type="button" class="small" onclick="addStorage(this)">新增键值</button>')+'</details>';e._original={...t};e.className='card target-card';e.dataset.status=targetStatus(t.url);if(locked)e.dataset.templateId=t.templateId;e.innerHTML='<summary class="target-summary"><span class="card-index">'+number+'</span>'+iconTag(t.url)+'<span class="card-main"><a class="card-name" href="'+esc(t.url||'#')+'" target="_blank" rel="noopener noreferrer" title="打开 '+esc(t.url||'')+'" onclick="event.stopPropagation()">'+esc(t.name||t.url||'未命名')+'</a>'+statusTime(t.url)+'</span>'+statusBadge(t.url)+'<span class="chev" aria-hidden="true"></span></summary><div class="target-form"><div class="grid"><div><label>URL *</label><input data-f="url" placeholder="https://example.com/" value="'+esc(t.url||'')+'" onblur="fillNameFromUrl(this)"'+readonly+'></div><div><label>名称 *</label><input data-f="name" placeholder="自动取 URL 域名" value="'+esc(t.name||'')+'"'+readonly+'></div><div><label>预热路径</label><input data-f="warmupPath" placeholder="/favicon.ico" value="'+esc(t.warmupPath||'/favicon.ico')+'"'+readonly+'></div></div>'+storageHtml+'<div class="target-actions"><div class="actions"><button type="button" onclick="retryTarget(this)">单独重试</button><button type="button" class="secondary history-button" onclick="showHistory(this)">查看最近 7 次记录</button></div><button type="button" class="danger" onclick="removeTarget(this)">删除目标</button></div></div>';root.appendChild(e)});applyStatusFilter();applyIcons()}
