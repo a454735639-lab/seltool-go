@@ -31,3 +31,6 @@ compress_icons.py
 # Go 构建缓存
 gocache/
 gomodcache/
+
+# 实际配置（含密码）
+.env

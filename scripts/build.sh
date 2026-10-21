@@ -101,7 +101,12 @@ log "部署"
 cd "$DEPLOY"
 NEW=$(docker image inspect "$IMAGE" --format '{{.Id}}')
 [ -f docker-compose.yml.bak-build ] || cp docker-compose.yml docker-compose.yml.bak-build
-sed -i "s|image: sha256:.*|image: $NEW|" docker-compose.yml
+# 配置在 .env 里时改 .env，否则回退到直接改 compose（兼容旧部署）
+if [ -f .env ] && grep -q "^IMAGE=" .env; then
+  sed -i "s|^IMAGE=.*|IMAGE=$NEW|" .env
+else
+  sed -i "s|image: sha256:.*|image: $NEW|" docker-compose.yml
+fi
 docker compose up -d --no-build --force-recreate 2>&1 | tail -1
 
 # ── 4. 验证 ──

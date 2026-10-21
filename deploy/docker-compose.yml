@@ -1,0 +1,23 @@
+services:
+
+  seltool:
+    # 容器级参数在同目录 .env；面板设置（CookieCloud / 通知 / MoviePilot /
+    # 定时任务）存在 config/*.json 里，由 Web 面板管理，不用写在这里。
+    image: ${IMAGE:?请在 .env 里设置 IMAGE}
+    container_name: seltool-go
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      SE_VNC_PASSWORD: ${SE_VNC_PASSWORD:?请在 .env 里设置 SE_VNC_PASSWORD}
+      VNCPROXY_ALLOWED_HOSTS: ${VNCPROXY_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      # Docker daemon 会注入 HTTP_PROXY，容器名不在默认 NO_PROXY 里，
+      # 不排除的话请求会被代理转走（表现为 502）
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+      no_proxy: ${NO_PROXY:-localhost,127.0.0.1}
+      SELTOOL_COOKIECLOUD_SYNC_CRON: ${SELTOOL_COOKIECLOUD_SYNC_CRON:-0 0 4 * * *}
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+    ports:
+      - "${HOST_HTTP_PORT:-8081}:8080"
+      - "127.0.0.1:${HOST_VNC_PORT:-7900}:7900"
