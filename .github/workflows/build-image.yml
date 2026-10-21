@@ -1,13 +1,12 @@
 name: build-multiarch
 
-# 在 GitHub 上构建 amd64 + arm64 双架构镜像，推到 GitHub Container Registry。
+# 构建 amd64 + arm64 双架构镜像：
+#   1) 推到 GitHub Container Registry（ghcr.io）
+#   2) 另外导出两个架构的离线 tar.gz，挂到 Release 上
 #
-# 和 Gitea 那条流水线的区别：
-#   - Gitea：用 NAS 上的本地基础镜像 seltool-go:runtime-slim2，只出 arm64
-#   - GitHub：用 deploy/Dockerfile.multiarch 从 debian:bookworm-slim 自包含构建，
-#     一次出 amd64 + arm64 两个架构
-#
-# 产物：ghcr.io/<owner>/<repo>:latest / :sha-<short>
+# 产物：
+#   ghcr.io/<owner>/<repo>:latest / :sha-<short> / :<日期>-<short>
+#   Release: build-<日期>-<short>  附件 seltool-go-amd64.tar.gz / seltool-go-arm64.tar.gz
 
 on:
   push:
@@ -22,8 +21,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      packages: write
+      contents: write   # 创建 Release、上传附件
+      packages: write   # 推送 ghcr
 
     steps:
       - name: 检出源码
@@ -46,10 +45,13 @@ jobs:
         id: meta
         run: |
           SHORT="$(echo "${{ github.sha }}" | cut -c1-7)"
+          DATE="$(date +%Y%m%d)"
           echo "short=$SHORT" >> "$GITHUB_OUTPUT"
-          echo "date=$(date +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "release_tag=build-$DATE-$SHORT" >> "$GITHUB_OUTPUT"
 
-      - name: 构建并推送
+      # ① 多架构清单推到 ghcr（不落本地，直接推）
+      - name: 构建并推送（amd64 + arm64）
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -63,6 +65,75 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # ② 单独导两个架构的离线包（复用上面的层缓存，很快）
+      - name: 导出 amd64 离线包
+        run: |
+          set -eu
+          docker buildx build \
+            --platform linux/amd64 \
+            -f deploy/Dockerfile.multiarch \
+            --output type=docker \
+            -t seltool-go:amd64 \
+            --cache-from type=gha \
+            .
+          docker save seltool-go:amd64 | gzip -9 > seltool-go-amd64.tar.gz
+          ls -lh seltool-go-amd64.tar.gz
+
+      - name: 导出 arm64 离线包
+        run: |
+          set -eu
+          docker buildx build \
+            --platform linux/arm64 \
+            -f deploy/Dockerfile.multiarch \
+            --output type=docker \
+            -t seltool-go:arm64 \
+            --cache-from type=gha \
+            .
+          docker save seltool-go:arm64 | gzip -9 > seltool-go-arm64.tar.gz
+          ls -lh seltool-go-arm64.tar.gz
+
+      # ③ 挂到 Release
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.release_tag }}
+          name: ${{ steps.meta.outputs.release_tag }}
+          files: |
+            seltool-go-amd64.tar.gz
+            seltool-go-arm64.tar.gz
+          body: |
+            ## seltool-go ${{ steps.meta.outputs.release_tag }}
+
+            提交：`${{ github.sha }}`
+
+            ### 在线拉取（推荐）
+
+            ```sh
+            docker pull ${{ env.IMAGE }}:latest
+            ```
+
+            多架构清单，Docker 会按本机架构自动选择。
+
+            ### 离线导入
+
+            ```sh
+            # x86_64 / Intel / AMD
+            docker load < seltool-go-amd64.tar.gz
+
+            # ARM64 / 树莓派 / Apple Silicon / 群晖 ARM 机型
+            docker load < seltool-go-arm64.tar.gz
+            ```
+
+            导入后镜像名是 `seltool-go:amd64` 或 `seltool-go:arm64`，按需重命名：
+
+            ```sh
+            docker tag seltool-go:amd64 seltool-go:local
+            ```
+
+            ### 部署
+
+            见 [README](https://github.com/${{ github.repository }}#快速开始)。
+
       - name: 输出摘要
         run: |
           {
@@ -73,4 +144,5 @@ jobs:
             echo "| 架构 | linux/amd64, linux/arm64 |"
             echo "| 镜像 | \`${{ env.IMAGE }}\` |"
             echo "| 标签 | \`latest\` / \`sha-${{ steps.meta.outputs.short }}\` |"
+            echo "| Release | \`${{ steps.meta.outputs.release_tag }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
