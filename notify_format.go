@@ -71,21 +71,19 @@ func classifyFailure(t Target, message string) (category, detail string) {
 		strings.Contains(m, "challenge") || strings.Contains(m, "人机") ||
 		strings.Contains(m, "请稍候") || strings.Contains(m, "cf-mitigated") {
 		d := ""
-		if g := rayIDRe.FindStringSubmatch(raw); len(g) > 1 {
-			d = "Ray ID " + g[1][:8]
-		} else if strings.Contains(m, "请稍候") {
-			d = "提示「请稍候…」"
+		if strings.Contains(m, "请稍候") {
+			d = "需要人机验证"
 		} else if strings.Contains(m, "just a moment") {
-			d = "提示「Just a moment…」"
+			d = "需要人机验证"
 		}
-		return "被 Cloudflare 拦截", d
+		return "人机验证拦截", d
 	}
 
 	if strings.Contains(m, "err_cert") || strings.Contains(m, "x509") ||
 		strings.Contains(m, "certificate") || strings.Contains(m, "证书") {
-		d := ""
-		if g := certErrRe.FindStringSubmatch(raw); len(g) > 1 {
-			d = g[1]
+		d := "证书无效"
+		if strings.Contains(m, "date_invalid") || strings.Contains(m, "expired") {
+			d = "证书已过期"
 		}
 		return "网站证书失效", d
 	}
@@ -94,20 +92,20 @@ func classifyFailure(t Target, message string) (category, detail string) {
 		code := g[1]
 		switch {
 		case strings.Contains(code, "NAME_NOT_RESOLVED"), strings.Contains(code, "NAME_RESOLUTION"):
-			return "域名解析失败", "站点可能换域名了（" + code + "）"
+			return "域名解析失败", "站点可能换域名了"
 		case strings.Contains(code, "CONNECTION_CLOSED"), strings.Contains(code, "CONNECTION_RESET"),
 			strings.Contains(code, "CONNECTION_REFUSED"), strings.Contains(code, "ADDRESS_UNREACHABLE"):
-			return "站点拒绝连接", code + "（站点可能挂了或被墙）"
+			return "站点拒绝连接", "站点可能挂了或被墙"
 		case strings.Contains(code, "TIMED_OUT"):
-			return "连接超时", code
+			return "连接超时", "响应太慢"
 		case strings.Contains(code, "INTERNET_DISCONNECTED"):
-			return "本机网络断开", code
+			return "本机网络断开", "检查一下本机网络"
 		case strings.Contains(code, "TOO_MANY_REDIRECTS"):
-			return "跳转次数过多", code
+			return "跳转次数过多", "站点配置有问题"
 		case strings.Contains(code, "HTTP2_PROTOCOL_ERROR"):
-			return "网站协议异常", code
+			return "网站协议异常", "站点服务异常"
 		default:
-			return "站点连不上", code
+			return "站点连不上", ""
 		}
 	}
 
@@ -117,15 +115,11 @@ func classifyFailure(t Target, message string) (category, detail string) {
 	}
 
 	if strings.Contains(m, "chrome") || strings.Contains(m, "chromedp") || strings.Contains(m, "浏览器") {
-		return "浏览器异常", truncateRunes(raw, 40)
+		return "浏览器异常", "浏览器启动或执行失败"
 	}
 
 	if strings.Contains(m, "等待页面加载超时") {
-		d := "页面白屏"
-		if g := titleRe.FindStringSubmatch(raw); len(g) > 1 && strings.TrimSpace(g[1]) != "" {
-			d = "页面标题：" + truncateRunes(strings.TrimSpace(g[1]), 24)
-		}
-		return "页面打不开", d
+		return "页面打不开", "页面白屏或加载不动"
 	}
 
 	loginish := strings.Contains(m, "登录态") || strings.Contains(m, "未登录") ||
@@ -134,19 +128,19 @@ func classifyFailure(t Target, message string) (category, detail string) {
 		strings.Contains(m, "含登录表单") || strings.Contains(m, "登录/注册") ||
 		strings.Contains(m, "密码输入框") || strings.Contains(m, "login")
 	if loginish {
-		if key := primaryCredentialKey(t); key != "" {
-			return "登录过期（Token）", "凭据字段 " + key
+		if primaryCredentialKey(t) != "" {
+			return "登录过期（Token）", ""
 		}
 		return "登录过期（Cookie）", ""
 	}
 
 	if strings.Contains(m, "cookie") && (strings.Contains(m, "未找到") ||
 		strings.Contains(m, "缺失") || strings.Contains(m, "没有")) {
-		return "登录过期（Cookie）", "CookieCloud 里没有这个站的 Cookie"
+		return "登录过期（Cookie）", "CookieCloud 里没有这个站的记录"
 	}
 
 	if g := httpCodeRe.FindStringSubmatch(raw); len(g) > 1 {
-		return "站点故障（" + g[1] + "）", "服务器报错，等站点自己恢复"
+		return "站点故障（" + g[1] + "）", "站点服务器报错"
 	}
 
 	if strings.Contains(m, "timeout") || strings.Contains(m, "超时") {
@@ -159,7 +153,7 @@ func classifyFailure(t Target, message string) (category, detail string) {
 	}
 
 	if strings.Contains(m, "预热") {
-		return "站点连不上", "预热请求就失败了"
+		return "站点连不上", ""
 	}
 
 	if strings.Contains(m, "page load") || strings.Contains(m, "navigation") || strings.Contains(m, "导航") {
@@ -249,7 +243,7 @@ func categoryRank(cat string) int {
 	switch {
 	case needsRelogin(cat):
 		return 0
-	case cat == "被 Cloudflare 拦截", cat == "网站证书失效":
+	case cat == "人机验证拦截", cat == "网站证书失效":
 		return 1
 	case strings.HasPrefix(cat, "站点故障"), cat == "域名解析失败":
 		return 2
@@ -280,8 +274,8 @@ func buildFailureGroups(failed []Target, latest, previous map[string]RunRecord, 
 		}
 		streak, lastOK := failureStreak(recordsOf(t.URL))
 		g.items = append(g.items, failureItem{
-			name:    mdLinkText(t.DisplayName()),
-			url:     strings.TrimSpace(t.URL),
+			name:    t.DisplayName(),
+			url:     "", // 通知里只写站点名，不贴网址
 			streak:  streak,
 			lastOK:  lastOK,
 			rawNote: detail,
@@ -390,7 +384,7 @@ func buildTaskMessage(notificationName string, targets []Target, failed []Target
 			fmt.Fprintf(&b, "\n  Cookie 过期：%s\n    → 到 CookieCloud 重新同步一次", strings.Join(cookieItems, "、"))
 		}
 		if len(tokenItems) > 0 {
-			fmt.Fprintf(&b, "\n  Token 过期：%s\n    → 到站点重新抓 localStorage 里的凭据", strings.Join(tokenItems, "、"))
+			fmt.Fprintf(&b, "\n  Token 过期：%s\n    → 到站点重新抓取登录凭据", strings.Join(tokenItems, "、"))
 		}
 	}
 	return b.String()

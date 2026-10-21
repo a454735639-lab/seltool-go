@@ -667,7 +667,7 @@
     // 与后端 notify_format.go 同一套归类规则，卡片上直接说清失败原因
     function failureCategory(message,url){const raw=String(message||'').replace(/^执行失败：/,'');const m=raw.toLowerCase();
       if(!m)return '本次未执行';
-      if(m.includes('cloudflare')||m.includes('ray id')||m.includes('just a moment')||m.includes('checking your browser')||m.includes('challenge')||m.includes('人机')||m.includes('请稍候')||m.includes('cf-mitigated'))return '被 Cloudflare 拦截';
+      if(m.includes('cloudflare')||m.includes('ray id')||m.includes('just a moment')||m.includes('checking your browser')||m.includes('challenge')||m.includes('人机')||m.includes('请稍候')||m.includes('cf-mitigated'))return '人机验证拦截';
       if(m.includes('err_cert')||m.includes('x509')||m.includes('certificate')||m.includes('证书'))return '网站证书失效';
       const net=(raw.match(/net::(ERR_[A-Z_]+)/)||[])[1]||'';
       if(net){
