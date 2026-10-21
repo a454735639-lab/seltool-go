@@ -48,8 +48,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # ---- 文档与本地化 ----
     && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/* \
     # ---- GPU / 打印相关：--disable-gpu，用不到 ----
+    # 注意：只能用 libgs.so*，写成 libgs*.so* 会连 libgssapi_krb5.so.2 一起删掉，
+    # 那是 curl 的 Kerberos 依赖，删了 curl 直接起不来。
     && rm -f /usr/lib/*/libLLVM-*.so* /usr/lib/*/libz3.so* \
-    && rm -f /usr/lib/*/libgs.so* /usr/lib/*/libgs*.so* \
+    && rm -f /usr/lib/*/libgs.so* \
     && rm -rf /usr/lib/*/dri \
     # ---- chromium 翻译只留中英 ----
     && find /usr/lib/chromium/locales -type f \
