@@ -676,9 +676,11 @@
       if(m.includes('等待页面加载超时'))return '页面加载失败';
       const loginish=m.includes('登录态')||m.includes('未登录')||m.includes('需要登录')||m.includes('登录状态')||m.includes('登录检查')||m.includes('登录页')||m.includes('含登录表单')||m.includes('登录/注册')||m.includes('密码输入框')||m.includes('login');
       if(loginish){
-        // 有 localStorage 凭据的站失败多半是 token 过期，不是 Cookie
-        const t=(Array.isArray(targets)?targets:[]).find(x=>x&&x.url===url);
-        if(t&&Array.isArray(t.localStorage)&&t.localStorage.length)return 'Token 失效';
+        // 有 localStorage 凭据的站失败多半是 token 过期，不是 Cookie。
+        // 前端没有全局 targets 变量，直接看这张卡片有没有 storage 行。
+        const card=[...document.querySelectorAll('.target-card')].find(c=>{
+          const u=c.querySelector('[data-f="url"]');return u&&u.value.trim()===url;});
+        if(card&&card.querySelectorAll('[data-f="storage-key"]').length)return 'Token 失效';
         return 'Cookie 失效';
       }
       if(m.includes('cookie')&&(m.includes('未找到')||m.includes('缺失')||m.includes('没有')))return 'Cookie 失效';
