@@ -11,3 +11,5 @@
 *.tar
 *.tar.gz
 *.tgz
+gocache
+gomodcache

@@ -1,0 +1,58 @@
+# 多架构镜像：GitHub Actions 用 buildx 一次出 amd64 + arm64。
+#
+# 和 deploy/Dockerfile.ci 的区别：那个依赖本地的 seltool-go:runtime-slim2
+# 基础镜像（NAS 上手工构建的），GitHub runner 上没有。这里直接从
+# debian:bookworm-slim 装浏览器和 VNC，构建过程完全自包含。
+
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+
+ARG TARGETOS=linux
+ARG TARGETARCH
+
+WORKDIR /src
+ENV CGO_ENABLED=0 \
+    GOFLAGS=-mod=mod \
+    GOPROXY=https://goproxy.cn,direct
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/seltool . && \
+    GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/vncproxy ./cmd/vncproxy && \
+    ls -lh /out/
+
+
+FROM debian:bookworm-slim
+
+ENV DISPLAY=:99 \
+    TZ=Asia/Shanghai \
+    SELTOOL_CHROME_BIN=/usr/bin/chromium \
+    DEBIAN_FRONTEND=noninteractive
+
+# chromium 用于执行站点任务，Xvfb/x11vnc/fluxbox 用于 noVNC 观看，
+# tini 做 1 号进程，中文字体保证页面不乱码。
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      chromium \
+      xvfb \
+      x11vnc \
+      fluxbox \
+      tini \
+      ca-certificates \
+      fonts-noto-cjk \
+      xdotool \
+      wmctrl \
+      procps \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=build /out/seltool /app/seltool
+COPY --from=build /out/vncproxy /app/vncproxy
+COPY deploy/entrypoint.sh /app/entrypoint.sh
+
+# COPY 不保证保留执行位，缺了会启动即死
+RUN chmod +x /app/seltool /app/vncproxy /app/entrypoint.sh
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]
