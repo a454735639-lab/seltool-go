@@ -52,6 +52,11 @@ vi .env
 docker compose up -d
 ```
 
+> **`config/` 必须挂载**。容器内的 `/app/config` 是临时的，不挂载的话
+> 目标列表、CookieCloud、通知、管理员账号都会随容器重建而丢失。
+> `.env` 不会进镜像（避免把密码打包给拉镜像的人），它只在宿主机被
+> `docker compose` 读取，用来替换 compose 里的占位符。
+
 打开 `http://<你的IP>:8081`，首次进入注册管理员账号。
 
 noVNC 实时观看（仅本机）：`http://127.0.0.1:7900`
