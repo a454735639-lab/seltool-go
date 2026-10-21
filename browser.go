@@ -518,6 +518,15 @@ func (b *Browser) checkStatus(ctx context.Context, target Target) (bool, string)
 					return false, "登录状态检查失败（页面有登录/注册入口）"
 				}
 			}
+			// 通用兜底：页面上有**可见的**密码输入框，基本就是登录表单。
+			// 朱雀（TNode）这类 SPA 未登录时标题是「用户登录」能靠关键字命中，
+			// 但换个站标题不一定带「登录」，所以补这条。
+			// 只查可见性，避免误伤「DOM 里藏了个登录弹窗」的站。
+			if hit, err := b.visiblePasswordInput(ctx); err != nil {
+				logf("目标 [%s] 密码框检测出错: %v", target.DisplayName(), err)
+			} else if hit {
+				return false, "登录状态检查失败（页面有可见的密码输入框）"
+			}
 			if title != "" {
 				if containsAny(title, failTitles...) {
 					return false, "登录状态检查失败（标题命中失败关键字：" + title + "）"
@@ -547,6 +556,26 @@ func (b *Browser) checkStatus(ctx context.Context, target Target) (bool, string)
 			return false, "登录状态检查失败（浏览器已关闭）"
 		}
 	}
+}
+
+// visiblePasswordInput 判断页面上是否存在**可见的**密码输入框。
+//
+// 只查 selector 不够：很多站把登录弹窗写在 DOM 里默认隐藏，
+// querySelectorAll 会命中但用户看不到，那样会把已登录误判成未登录。
+// 所以逐个检查布局尺寸和 visibility/display/opacity。
+func (b *Browser) visiblePasswordInput(ctx context.Context) (bool, error) {
+	script := `(() => {
+		const list = document.querySelectorAll('input[type="password"]');
+		for (const el of list) {
+			const r = el.getBoundingClientRect();
+			if (r.width <= 0 || r.height <= 0) continue;
+			const s = getComputedStyle(el);
+			if (s.visibility === 'hidden' || s.display === 'none' || s.opacity === '0') continue;
+			return true;
+		}
+		return false;
+	})()`
+	return runValue(ctx, 8*time.Second, chromedp.Evaluate[bool](script))
 }
 
 func (b *Browser) selectorExists(ctx context.Context, selector string) (bool, error) {
