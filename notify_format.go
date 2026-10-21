@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"regexp"
 	"sort"
 	"strings"
@@ -254,6 +256,20 @@ func categoryRank(cat string) int {
 	}
 }
 
+// hostResolves 判断域名当前是否有解析记录。
+// 有些站关停后 DNS 记录被删，但 Chromium 只会报「连接被关闭」，
+// 不查一次 DNS 就会把「域名没了」误报成「站点挂了或被墙」。
+func hostResolves(host string) bool {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupHost(ctx, host)
+	return err == nil && len(addrs) > 0
+}
+
 // buildFailureGroups 把失败目标按原因归类聚合。
 func buildFailureGroups(failed []Target, latest, previous map[string]RunRecord, recordsOf func(string) []RunRecord) []groupedFailure {
 	byCat := map[string]*groupedFailure{}
@@ -264,6 +280,13 @@ func buildFailureGroups(failed []Target, latest, previous map[string]RunRecord, 
 			reason = record.Message
 		}
 		cat, detail := classifyFailure(t, reason)
+		// 连接类失败再确认一次 DNS：域名没了和站点挂了，处理方式完全不同
+		if cat == "站点拒绝连接" || cat == "站点连不上" || cat == "连接超时" {
+			if host := hostOf(t.URL); !hostResolves(host) {
+				cat = "域名解析失败"
+				detail = "站点可能换域名了"
+			}
+		}
 		if cat == "" {
 			cat = truncateRunes(strings.TrimPrefix(strings.TrimSpace(reason), "执行失败："), 14)
 		}
