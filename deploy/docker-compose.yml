@@ -3,7 +3,8 @@ services:
   seltool:
     # 容器级参数在同目录 .env；面板设置（CookieCloud / 通知 / MoviePilot /
     # 定时任务）存在 config/*.json 里，由 Web 面板管理，不用写在这里。
-    image: ${IMAGE:?请在 .env 里设置 IMAGE}
+    # 默认用 ghcr 上的最新版；要锁版本就在 .env 里写 IMAGE=...:sha-xxxxxxx
+    image: ${IMAGE:-ghcr.io/a454735639-lab/seltool-go:latest}
     container_name: seltool-go
     restart: unless-stopped
     environment:

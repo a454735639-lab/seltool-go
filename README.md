@@ -70,7 +70,7 @@ noVNC 实时观看（仅本机）：`http://127.0.0.1:7900`
 ```yaml
 services:
   seltool:
-    image: ${IMAGE:?请在 .env 里设置 IMAGE}
+    image: ${IMAGE:-ghcr.io/a454735639-lab/seltool-go:latest}
     container_name: seltool-go
     restart: unless-stopped
     environment:
