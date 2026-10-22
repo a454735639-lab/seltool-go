@@ -68,6 +68,18 @@ func classifyFailure(t Target, message string) (category, detail string) {
 		return "本次未执行", ""
 	}
 
+	// 先看是不是 CF 的 5xx 错误页：这类页面标题常带 "Just a moment..."，
+	// 但服务器已经挂了，不是挑战。归类成「人机验证」会误导人去等盾过去。
+	if g := httpCodeRe.FindStringSubmatch(raw); len(g) > 1 && g[1][0] == '5' &&
+		(strings.Contains(m, "just a moment") || strings.Contains(m, "cloudflare") ||
+			strings.Contains(m, "ray id") || strings.Contains(m, "请稍候")) {
+		d := "站点服务器报错"
+		if strings.Contains(m, "just a moment") {
+			d = "CF 错误页（站点源站故障）"
+		}
+		return "站点故障（" + g[1] + "）", d
+	}
+
 	if strings.Contains(m, "cloudflare") || strings.Contains(m, "ray id") ||
 		strings.Contains(m, "just a moment") || strings.Contains(m, "checking your browser") ||
 		strings.Contains(m, "challenge") || strings.Contains(m, "人机") ||
@@ -275,6 +287,37 @@ func hostResolves(host string) bool {
 	return err == nil && len(addrs) > 0
 }
 
+// categoryEmoji 给失败分类配一个 emoji，通知里扫一眼就知道是哪类问题。
+// 用 emoji 而不是站点 logo：企业微信 markdown 不认 base64 data URI，
+// 面板又在内网，微信服务器取不到图标 URL。
+func categoryEmoji(cat string) string {
+	switch {
+	case strings.HasPrefix(cat, "登录过期"):
+		return "🔑"
+	case cat == "人机验证拦截":
+		return "🛡️"
+	case strings.HasPrefix(cat, "访问被拒绝"):
+		return "🚫"
+	case cat == "域名解析失败":
+		return "🌐"
+	case cat == "网站证书失效":
+		return "🔒"
+	case strings.HasPrefix(cat, "站点故障"):
+		return "⚠️"
+	case cat == "页面打不开":
+		return "📄"
+	case cat == "连接超时":
+		return "⏱️"
+	case cat == "站点拒绝连接", cat == "站点连不上":
+		return "🔌"
+	case cat == "浏览器异常":
+		return "🧩"
+	case cat == "本次未执行":
+		return "⏸️"
+	}
+	return "•"
+}
+
 // buildFailureGroups 把失败目标按原因归类聚合。
 func buildFailureGroups(failed []Target, latest, previous map[string]RunRecord, recordsOf func(string) []RunRecord) []groupedFailure {
 	byCat := map[string]*groupedFailure{}
@@ -371,7 +414,7 @@ func buildTaskMessage(notificationName string, targets []Target, failed []Target
 
 		for _, g := range groups {
 			// 组标题：原因 + 计数 +（需重登标记）
-			head := fmt.Sprintf("%s ×%d", g.category, len(g.items))
+			head := fmt.Sprintf("%s %s ×%d", categoryEmoji(g.category), g.category, len(g.items))
 			if g.actionable {
 				head += " " + markWarn + "[需重登]" + markEnd
 				for _, it := range g.items {
