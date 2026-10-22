@@ -33,7 +33,7 @@ ENV DISPLAY=:99 \
     SELTOOL_CHROME_BIN=/usr/bin/chromium \
     DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
       chromium \
       xvfb \
       x11vnc \

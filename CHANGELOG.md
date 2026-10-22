@@ -1,0 +1,19 @@
+# Changelog
+
+## 1.0.0 (2026-10-22)
+
+首个语义化版本（1.0.0）。此前为无版本号的滚动更新。
+
+### 构建与分发
+- CI 双推：ghcr（`ghcr.io/a454735639-lab/seltoolgo`）+ Docker Hub（`asice99/seltool-go`）
+- 引入 `VERSION` 文件管理版本号，镜像打 `:<version>` 标签（同时保留 `:latest` / `:sha-<短哈希>` / `:<日期>-<短哈希>`）
+- Dockerfile 增加 `apt-get upgrade -y`，升级基础镜像全部软件包，降低已知漏洞
+
+### 本版本包含的功能
+- PT 站点保活巡检（chromedp，43 目标，CookieCloud 自动同步）
+- 企业微信双向交互：回调命令（STATUS / RUN_ALL / RETRY_FAILED / FAILED_LIST / HELP 等）、点击菜单、H5 快捷页 `/pt-panel`
+- 8 套主题（默认毛玻璃）
+- 自检接口 `GET /api/settings/selfcheck`
+- 任务结束页缓存释放（fadvise），内存回落
+- 失败原因通俗化分类（登录过期 / 人机验证 / 证书失效 / 域名解析 / 站点故障等）
+- 瞬时失败自动重试（批次结束后 60 秒，上限 10）
