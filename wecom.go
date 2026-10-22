@@ -271,3 +271,35 @@ func splitByBytes(s string, limit int) []string {
 	}
 	return out
 }
+
+// CreateQuickMenu 在企业微信应用底部创建「PT 保活」快捷菜单（view 型，指向 H5 快捷页）。
+// 前提：应用为 app 模式且已配置 corpid/secret/agentid。
+func (w *WeCom) CreateQuickMenu(statusURL, retryURL string) error {
+	if w.Mode() != "app" || !w.Enabled() {
+		return fmt.Errorf("需先配置企业微信应用模式（corpid + secret + agentid）")
+	}
+	token, err := w.accessToken()
+	if err != nil {
+		return err
+	}
+	apiBase := strings.TrimRight(strings.TrimSpace(w.cfg.Proxy), "/")
+	if apiBase == "" {
+		apiBase = "https://qyapi.weixin.qq.com"
+	}
+	menu := map[string]any{
+		"button": []map[string]any{
+			{
+				"name": "PT 保活",
+				"sub_button": []map[string]any{
+					{"name": "查状态", "type": "view", "url": statusURL},
+					{"name": "一键重试失败", "type": "view", "url": retryURL},
+				},
+			},
+		},
+	}
+	if err := w.postJSON(apiBase+"/cgi-bin/menu/create?access_token="+url.QueryEscape(token), menu); err != nil {
+		return err
+	}
+	logf("已创建企微「PT 保活」快捷菜单 → %s", statusURL)
+	return nil
+}

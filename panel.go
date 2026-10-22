@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/subtle"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 )
@@ -98,4 +99,30 @@ func (s *Server) handlePanelRetry(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "目标不存在"})
 	}
+}
+
+// handleCreateWeComMenu 调用企微 API 在工作台创建「PT 保活」快捷菜单。
+func (s *Server) handleCreateWeComMenu(w http.ResponseWriter, r *http.Request) {
+	ns := s.notify.Current()
+	key := ns.PanelKey
+	if key == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请先填「快捷指令页密钥」并保存"})
+		return
+	}
+	host := ns.PanelHost
+	if host == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请先填「外网域名」并保存"})
+		return
+	}
+	if !strings.HasPrefix(host, "http") {
+		host = "https://" + host
+	}
+	statusURL := host + "/pt-panel?k=" + url.QueryEscape(key)
+	retryURL := statusURL + "&action=retryall"
+	wecom := NewWeCom(ns.toConfig())
+	if err := wecom.CreateQuickMenu(statusURL, retryURL); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"message": "已创建，刷新企业微信工作台即可见「PT 保活」菜单"})
 }

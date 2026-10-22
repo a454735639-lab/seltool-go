@@ -27,6 +27,8 @@ type NotifySettings struct {
 	CallbackOwner   string `json:"callbackOwner"`
 	// 快捷指令 H5 页访问密钥（非空即启用 /pt-panel 数据接口）。
 	PanelKey string `json:"panelKey"`
+	// 外网访问域名（拼快捷页/菜单链接用，可省 https://）。
+	PanelHost string `json:"panelHost"`
 }
 
 func (s NotifySettings) toConfig() WeComConfig {
@@ -105,6 +107,7 @@ func (s *NotifyStore) Save(in NotifySettings) (NotifySettings, error) {
 	}
 	in.CallbackOwner = strings.TrimSpace(in.CallbackOwner)
 	in.PanelKey = strings.TrimSpace(in.PanelKey)
+	in.PanelHost = strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(in.PanelHost), "https://"), "http://")
 	if in.MsgType == "" {
 		in.MsgType = "markdown"
 	}

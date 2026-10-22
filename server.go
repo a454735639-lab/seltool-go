@@ -124,6 +124,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/pt-panel/summary", s.handlePanelSummary)
 	mux.HandleFunc("POST /api/pt-panel/retry-failed", s.handlePanelRetryFailed)
 	mux.HandleFunc("POST /api/pt-panel/retry", s.handlePanelRetry)
+	mux.HandleFunc("POST /api/settings/wecom/quick-menu", s.requireAuth(s.requireCSRF(s.handleCreateWeComMenu)))
 	mux.HandleFunc("GET /api/settings/schedule", s.requireAuth(s.handleGetSchedule))
 	mux.HandleFunc("PUT /api/settings/schedule", s.requireAuth(s.requireCSRF(s.handleSaveSchedule)))
 	mux.HandleFunc("GET /api/settings/schedule/presets", s.requireAuth(s.handleSchedulePresets))
