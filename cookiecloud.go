@@ -170,12 +170,35 @@ func (c *CookieCloud) LocalStorageFor(data map[string][]LocalStorage, target Tar
 	}
 	domain := resolveDomain(target)
 	allowed := buildAllowedDomains(domain)
-	var matches []LocalStorage
-	for d, items := range data {
-		if !domainMatches(normalizeDomain(d), allowed) {
-			continue
+	// map 遍历顺序随机：多域命中时同名 key 谁覆盖谁不确定，注入结果不可复现。
+	// 固定为「最具体域优先」（标签数多者先），同标签数按字典序，并按 Key 去重。
+	var hit []string
+	for d := range data {
+		if domainMatches(normalizeDomain(d), allowed) {
+			hit = append(hit, d)
 		}
-		matches = append(matches, items...)
+	}
+	if len(hit) == 0 {
+		return nil
+	}
+	sort.Slice(hit, func(i, j int) bool {
+		ni := strings.Count(normalizeDomain(hit[i]), ".")
+		nj := strings.Count(normalizeDomain(hit[j]), ".")
+		if ni != nj {
+			return ni > nj
+		}
+		return hit[i] < hit[j]
+	})
+	seen := make(map[string]struct{}, 32)
+	var matches []LocalStorage
+	for _, d := range hit {
+		for _, item := range data[d] {
+			if _, dup := seen[item.Key]; dup {
+				continue
+			}
+			seen[item.Key] = struct{}{}
+			matches = append(matches, item)
+		}
 	}
 	if len(matches) > 0 {
 		logf("域名 [%s] 从 CookieCloud 同步到 %d 项 localStorage", domain, len(matches))
@@ -487,10 +510,53 @@ func domainMatches(cookieDomain string, allowed []string) bool {
 	return false
 }
 
+// normalizeDomain 把用户可能粘贴的各种写法归一成裸域名：
+//
+//	https://kp.m-team.cc:8443/login?x=1  →  kp.m-team.cc
+//	//kp.m-team.cc                       →  kp.m-team.cc
+//	.hdtime.org.                         →  hdtime.org
+//
+// 旧实现只做 ToLower + 去前导点，带 scheme/端口/路径的输入会静默匹配 0 项
+// （例如 https://hdtime.org 这种两段域名，allowed 里只剩带 scheme 的那条）。
 func normalizeDomain(value string) string {
 	v := strings.ToLower(strings.TrimSpace(value))
-	v = strings.TrimPrefix(v, ".")
+	if v == "" {
+		return ""
+	}
+	raw := v
+	if strings.HasPrefix(raw, "//") {
+		raw = "http:" + raw
+	}
+	if strings.Contains(raw, "://") {
+		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+			v = u.Hostname()
+		}
+	} else {
+		if i := strings.IndexAny(v, "/?#"); i >= 0 {
+			v = v[:i]
+		}
+		if i := strings.LastIndex(v, "@"); i >= 0 {
+			v = v[i+1:]
+		}
+		if i := strings.LastIndex(v, ":"); i >= 0 && i > strings.LastIndex(v, "]") {
+			if port := v[i+1:]; port != "" && isDigits(port) {
+				v = v[:i]
+			}
+		}
+	}
+	v = strings.TrimSuffix(v, ".")
+	v = strings.TrimLeft(v, ".")
 	return v
+}
+
+// isDigits 判断是否为纯数字串（用于识别 host:port 里的端口）。
+func isDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func toCookie(node map[string]any, fallbackDomain string) (Cookie, bool) {

@@ -150,11 +150,19 @@ func textReplyXML(toUser, fromUser, content string) string {
 		toUser, fromUser, time.Now().Unix(), content)
 }
 
-// containsWeComUser 判断发送者是否在白名单（逗号分隔，* 或空表示不限制）。
+// containsWeComUser 判断发送者是否在白名单（逗号分隔）。
+//
+// 空白名单 = 拒绝。此前空串和「含 * 的任意输入」都会放行所有人 —— 管理员配好
+// 回调却忘填白名单时，企业内任何成员（甚至外部联系人）发一句「暂停定时」就能
+// 让保活永久停摆，进而导致 PT 账号被清号；而 `zhang*li` 这种输入也会变成全放行。
 func containsWeComUser(whitelist, fromUser string) bool {
 	whitelist = strings.TrimSpace(whitelist)
-	if whitelist == "" || strings.Contains(whitelist, "*") {
-		return true
+	if whitelist == "" {
+		return false
+	}
+	fromUser = strings.TrimSpace(fromUser)
+	if fromUser == "" {
+		return false
 	}
 	for _, u := range strings.Split(whitelist, ",") {
 		if strings.TrimSpace(u) == fromUser {
@@ -226,7 +234,11 @@ func (s *Server) handleWeComCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		logf("wecom 收到消息 from=%s msgtype=%s content=%q", msg.FromUser, msg.MsgType, msg.Content)
 		if !containsWeComUser(ns.CallbackOwner, msg.FromUser) {
-			logf("wecom 白名单拒绝 from=%s whitelist=%q", msg.FromUser, ns.CallbackOwner)
+			if strings.TrimSpace(ns.CallbackOwner) == "" {
+				logf("wecom 拒绝 from=%s：回调白名单为空，出于安全默认拒绝。请在「通知设置」里填入允许下发指令的企微 UserID（逗号分隔）", msg.FromUser)
+			} else {
+				logf("wecom 白名单拒绝 from=%s whitelist=%q", msg.FromUser, ns.CallbackOwner)
+			}
 			http.Error(w, "forbidden: sender not in whitelist", http.StatusForbidden)
 			return
 		}

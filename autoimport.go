@@ -97,21 +97,26 @@ func RunAutoImport(data map[string][]Cookie, lsData map[string][]LocalStorage, s
 		return out, nil
 	}
 
-	existing := store.Get()
-	incoming, _ := BuildImportTargets(domains, existing, data)
-	if len(incoming) == 0 {
-		return out, nil
+	// 读-改-写必须原子，否则与面板保存并发时会覆盖用户刚加的目标。
+	var added []Target
+	_, err := store.Update(func(existing []Target) ([]Target, error) {
+		incoming, _ := BuildImportTargets(domains, existing, data)
+		if len(incoming) == 0 {
+			return existing, nil
+		}
+		var skipped int
+		added, skipped = mergeTargets(incoming, existing)
+		out.Skipped = skipped
+		if len(added) == 0 {
+			return existing, nil
+		}
+		return append(append([]Target{}, existing...), added...), nil
+	})
+	if err != nil {
+		return out, fmt.Errorf("保存目标失败: %w", err)
 	}
-
-	added, skipped := mergeTargets(incoming, existing)
-	out.Skipped = skipped
 	if len(added) == 0 {
 		return out, nil
-	}
-
-	merged := append(append([]Target{}, existing...), added...)
-	if _, err := store.Save(merged); err != nil {
-		return out, fmt.Errorf("保存目标失败: %w", err)
 	}
 	for _, t := range added {
 		out.Added = append(out.Added, t.DisplayName())

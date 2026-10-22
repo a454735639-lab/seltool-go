@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -116,11 +117,24 @@ var dummyHash = []byte("$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17
 type Session struct {
 	Username string
 	CSRF     string
+	// ExpiresAt 为服务端过期时间。此前会话永不过期：抓到/共享过 cookie 的人
+	// 在进程重启前一直有效，且匿名请求每次都会新建一条永久记录。
+	ExpiresAt time.Time
+	// LastSeen 用于超出上限时淘汰最久未访问的会话。
+	LastSeen time.Time
 }
+
+// 会话生命周期与总量上限。
+const (
+	sessionTTL     = 24 * time.Hour
+	maxSessions    = 2048
+	sessionSweepAt = 256 // 每新建这么多会话顺手清一次过期项
+)
 
 type SessionStore struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
+	created  int
 }
 
 func NewSessionStore() *SessionStore {
@@ -137,11 +151,39 @@ func randomToken(bytesLen int) string {
 
 func (s *SessionStore) Create(username string) (id string, sess *Session) {
 	id = randomToken(32)
-	sess = &Session{Username: username, CSRF: randomToken(32)}
+	now := time.Now()
+	sess = &Session{Username: username, CSRF: randomToken(32), ExpiresAt: now.Add(sessionTTL), LastSeen: now}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.created++
+	if s.created >= sessionSweepAt || len(s.sessions) >= maxSessions {
+		s.created = 0
+		s.evictLocked(now)
+	}
 	s.sessions[id] = sess
-	s.mu.Unlock()
 	return id, sess
+}
+
+// evictLocked 清理过期会话；若仍超上限，淘汰最久未访问的，避免匿名请求把内存撑爆。
+func (s *SessionStore) evictLocked(now time.Time) {
+	for id, sess := range s.sessions {
+		if !sess.ExpiresAt.IsZero() && now.After(sess.ExpiresAt) {
+			delete(s.sessions, id)
+		}
+	}
+	for len(s.sessions) >= maxSessions {
+		oldestID := ""
+		var oldest time.Time
+		for id, sess := range s.sessions {
+			if oldestID == "" || sess.LastSeen.Before(oldest) {
+				oldestID, oldest = id, sess.LastSeen
+			}
+		}
+		if oldestID == "" {
+			return
+		}
+		delete(s.sessions, oldestID)
+	}
 }
 
 func (s *SessionStore) Get(id string) (*Session, bool) {
@@ -149,9 +191,23 @@ func (s *SessionStore) Get(id string) (*Session, bool) {
 		return nil, false
 	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	sess, ok := s.sessions[id]
-	return sess, ok
+	s.mu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	now := time.Now()
+	if !sess.ExpiresAt.IsZero() && now.After(sess.ExpiresAt) {
+		s.Delete(id)
+		return nil, false
+	}
+	s.mu.Lock()
+	if cur, exists := s.sessions[id]; exists {
+		cur.LastSeen = now
+		sess = cur
+	}
+	s.mu.Unlock()
+	return sess, true
 }
 
 func (s *SessionStore) Delete(id string) {

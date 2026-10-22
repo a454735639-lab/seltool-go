@@ -33,28 +33,57 @@ type BatchSubmission struct {
 
 // Automation 串联 CookieCloud、浏览器、历史记录与通知。
 type Automation struct {
-	cfg     *Config
-	store   *TargetStore
-	history *History
+	cfg          *Config
+	store        *TargetStore
+	history      *History
 	cookies      *CookieCloud
 	localStorage map[string][]LocalStorage // CookieCloud 同步的 localStorage（按域名）
 	webhook      *Webhook
-	alerts  *AlertState
+	alerts       *AlertState
 
-	running   atomic.Bool
-	runMu     sync.Mutex // 串行化浏览器实例的创建与销毁
-	browser   *Browser
+	running atomic.Bool
+	runMu   sync.Mutex // 串行化浏览器实例的创建与销毁
+	browser *Browser
+
+	// errMu 只保护 lastError。此前它复用 runMu，导致浏览器启动期间（可能长达
+	// 数十秒）面板查询任务状态全部阻塞，Shutdown 也无法及时进入。
+	errMu     sync.RWMutex
 	lastError error
+
+	// stopCh 用于让重试等待等长睡眠提前退出；Shutdown 时关闭。
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 func NewAutomation(cfg *Config, store *TargetStore, history *History, cookies *CookieCloud, webhook *Webhook, alerts *AlertState) *Automation {
-	return &Automation{cfg: cfg, store: store, history: history, cookies: cookies, webhook: webhook, alerts: alerts}
+	return &Automation{cfg: cfg, store: store, history: history, cookies: cookies, webhook: webhook, alerts: alerts, stopCh: make(chan struct{})}
 }
 
 func (a *Automation) IsRunning() bool { return a.running.Load() }
 
-func (a *Automation) TaskError() error       { a.runMu.Lock(); defer a.runMu.Unlock(); return a.lastError }
-func (a *Automation) setTaskError(err error) { a.runMu.Lock(); a.lastError = err; a.runMu.Unlock() }
+func (a *Automation) TaskError() error {
+	a.errMu.RLock()
+	defer a.errMu.RUnlock()
+	return a.lastError
+}
+
+func (a *Automation) setTaskError(err error) {
+	a.errMu.Lock()
+	a.lastError = err
+	a.errMu.Unlock()
+}
+
+// sleepOrStop 等待 d，期间收到停止信号则立即返回 false。
+func (a *Automation) sleepOrStop(d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-a.stopCh:
+		return false
+	}
+}
 
 func (a *Automation) acquire() bool {
 	if a.running.CompareAndSwap(false, true) {
@@ -242,7 +271,10 @@ func (a *Automation) retryTransientFailures(browser *Browser, targets []Target, 
 			}
 			return ""
 		}())
-	time.Sleep(wait)
+	if !a.sleepOrStop(wait) {
+		logf("等待重试期间收到停止信号，取消本轮自动重试")
+		return
+	}
 
 	for i, t := range retry {
 		logf("自动重试 %d/%d：%s", i+1, len(retry), t.DisplayName())
@@ -255,6 +287,15 @@ func (a *Automation) retryTransientFailures(browser *Browser, targets []Target, 
 
 func (a *Automation) doExecuteTargets(targets []Target, taskName string) {
 	logf("开始执行%s，共 %d 个目标", taskName, len(targets))
+
+	// 异常（panic）路径也要回收浏览器：否则该轮约 300MB 的 Chromium 与全部 tab
+	// 上下文只能等下轮复用或进程退出，异常轮次内存不回。
+	closed := false
+	defer func() {
+		if !closed {
+			a.closeBrowser()
+		}
+	}()
 
 	// 任务开始时拉最新 CookieCloud 数据，确保用上浏览器里刚登录的站点；
 	// 若某个目标仍因 Cookie 失效失败，循环内会再刷新一次并重试该目标。
@@ -308,6 +349,7 @@ func (a *Automation) doExecuteTargets(targets []Target, taskName string) {
 		// 这里统一再试一次，避免「批量失败、单跑成功」的困惑。
 		a.retryTransientFailures(browser, targets, cookieData)
 		a.closeBrowser()
+		closed = true
 	}
 	logf("%s执行结束", taskName)
 
@@ -413,6 +455,8 @@ func (a *Automation) handleBrowserClosed(target Target, err error) {
 }
 
 func (a *Automation) Shutdown() {
+	// 让正在进行的重试等待立刻退出，避免关停要干等 60s。
+	a.stopOnce.Do(func() { close(a.stopCh) })
 	a.closeBrowser()
 }
 

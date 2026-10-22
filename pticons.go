@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -117,12 +118,29 @@ func (t *PTIconTable) Count() int {
 	return len(t.icons)
 }
 
+// dataImageMimeRe 限定 data URI 的 MIME 前缀。
+//
+// 只校验逗号后的 base64 是不够的：攻击者可以构造
+//
+//	data:x"><img src=x onerror=alert(1)>;base64,<合法 PNG>
+//
+// 解码校验能通过，但整串被前端拼进 innerHTML 后就是可执行脚本（同源，可读走
+// panelKey / webhook / CookieCloud KEY）。因此 MIME 部分必须白名单校验，
+// 且不放开 svg（可内嵌脚本）。
+var dataImageMimeRe = regexp.MustCompile(`^data:image/(png|jpeg|jpg|gif|webp|x-icon|vnd\.microsoft\.icon);base64,`)
+
+// maxIconDataURI 限制单条图标体积，避免超长字符串撑爆内存/配置。
+const maxIconDataURI = 4 << 20 // 4MiB
+
 // looksLikeImage 判断 data URI 里的内容是否真的是图片。
 //
 // MoviePilot 的 siteicon 表里混进了抓取失败时保存的 HTML 错误页
 // （如 Cloudflare 的 403 Forbidden），这类条目直接丢弃，避免前端拿到破图。
 func looksLikeImage(dataURI string) bool {
-	if !strings.HasPrefix(dataURI, "data:") {
+	if len(dataURI) > maxIconDataURI {
+		return false
+	}
+	if !dataImageMimeRe.MatchString(dataURI) {
 		return false
 	}
 	idx := strings.Index(dataURI, ",")
@@ -152,13 +170,7 @@ func looksLikeImage(dataURI string) bool {
 	case bytes.HasPrefix(raw, []byte("RIFF")) && len(raw) > 12 && bytes.HasPrefix(raw[8:], []byte("WEBP")):
 		return true
 	}
-	head := raw
-	if len(head) > 256 {
-		head = head[:256]
-	}
-	if bytes.Contains(bytes.ToLower(head), []byte("<svg")) {
-		return true
-	}
+	// 不再接受「MIME 说是图片、内容却是 SVG」的错配条目：SVG 可内嵌脚本。
 	return false
 }
 

@@ -83,7 +83,8 @@ func (s *NotifyStore) Current() NotifySettings {
 	return s.cur
 }
 
-// Save 保存配置；corpSecret 为空表示沿用已有值（面板不回显密码）。
+// Save 保存配置；敏感字段（corpSecret / webhookUrl / callbackToken /
+// callbackAesKey / panelKey）为空表示沿用已有值 —— 面板不再回显原文。
 func (s *NotifyStore) Save(in NotifySettings) (NotifySettings, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -93,6 +94,9 @@ func (s *NotifyStore) Save(in NotifySettings) (NotifySettings, error) {
 		in.Mode = "bot"
 	}
 	in.WebhookURL = strings.TrimSpace(in.WebhookURL)
+	if in.WebhookURL == "" {
+		in.WebhookURL = s.cur.WebhookURL
+	}
 	in.CorpID = strings.TrimSpace(in.CorpID)
 	in.ToUser = strings.TrimSpace(in.ToUser)
 	in.Proxy = strings.TrimSpace(in.Proxy)
@@ -106,7 +110,13 @@ func (s *NotifyStore) Save(in NotifySettings) (NotifySettings, error) {
 		in.CallbackAESKey = s.cur.CallbackAESKey
 	}
 	in.CallbackOwner = strings.TrimSpace(in.CallbackOwner)
+	if in.CallbackToken == "" {
+		in.CallbackToken = s.cur.CallbackToken
+	}
 	in.PanelKey = strings.TrimSpace(in.PanelKey)
+	if in.PanelKey == "" {
+		in.PanelKey = s.cur.PanelKey
+	}
 	in.PanelHost = strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(in.PanelHost), "https://"), "http://")
 	if in.MsgType == "" {
 		in.MsgType = "markdown"
@@ -119,11 +129,17 @@ func (s *NotifyStore) Save(in NotifySettings) (NotifySettings, error) {
 	return in, nil
 }
 
-// mask 返回给前端的视图：敏感字段只给是否已配置。
+// mask 返回给前端的视图：敏感字段一律不回显原文，只给「是否已配置」。
+//
+// webhookUrl 的 key 段、回调 Token、面板密钥都能直接下发指令或拉走数据，
+// 而 /api/settings/notify 只需要登录即可读取 —— 原文回显等于把凭据摆到
+// 任何一次 XSS、共享浏览器或截图里。前端按 has* 显示占位提示，
+// 留空提交即沿用原值。
 func (s NotifySettings) mask() map[string]any {
 	return map[string]any{
 		"mode":              s.Mode,
-		"webhookUrl":        s.WebhookURL,
+		"webhookUrl":        "",
+		"hasWebhookUrl":     strings.TrimSpace(s.WebhookURL) != "",
 		"msgType":           s.MsgType,
 		"corpId":            s.CorpID,
 		"agentId":           s.AgentID,
@@ -132,10 +148,13 @@ func (s NotifySettings) mask() map[string]any {
 		"onlyOnFailure":     s.OnlyOnFailure,
 		"hasCorpSecret":     strings.TrimSpace(s.CorpSecret) != "",
 		"callbackEnabled":   s.CallbackEnabled,
-		"callbackToken":     s.CallbackToken,
+		"callbackToken":     "",
+		"hasCallbackToken":  strings.TrimSpace(s.CallbackToken) != "",
 		"callbackOwner":     s.CallbackOwner,
 		"hasCallbackAESKey": strings.TrimSpace(s.CallbackAESKey) != "",
-		"panelKey":          s.PanelKey,
+		"panelKey":          "",
+		"hasPanelKey":       strings.TrimSpace(s.PanelKey) != "",
+		"panelHost":         s.PanelHost,
 		"enabled":           NewWeCom(s.toConfig()).Enabled(),
 	}
 }

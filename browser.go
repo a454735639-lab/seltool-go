@@ -135,9 +135,22 @@ func NewBrowser(cfg BrowserConfig) (*Browser, error) {
 	}
 
 	// 立即启动，避免首个目标承担冷启动耗时；失败要立刻暴露。
-	if err := chromedp.Do(browserCtx); err != nil {
+	//
+	// 注意：这里不能给 browserCtx 套 context.WithTimeout —— chromedp 把 target 绑定在
+	// 第一次 Do 使用的 ctx 上，派生 ctx 一旦 cancel 就会连带销毁绑定。因此用
+	// 「goroutine + 超时后 Close」兜底：CDP 握手不返回时 Close() 会 cancel browserCtx
+	// 让阻塞中的 Do 退出。此前无任何超时，握手卡住会让持锁的整个进程永久挂死。
+	startDone := make(chan error, 1)
+	go func() { startDone <- chromedp.Do(browserCtx) }()
+	select {
+	case err := <-startDone:
+		if err != nil {
+			b.Close()
+			return nil, fmt.Errorf("启动浏览器失败: %w", err)
+		}
+	case <-time.After(60 * time.Second):
 		b.Close()
-		return nil, fmt.Errorf("启动浏览器失败: %w", err)
+		return nil, fmt.Errorf("启动浏览器超时（60s 内未完成 CDP 握手）")
 	}
 	return b, nil
 }
@@ -175,9 +188,20 @@ func (b *Browser) Close() {
 // 销毁绑定，后续所有命令都收不到响应（表现为永久挂起）。
 func (b *Browser) newTab() (context.Context, context.CancelFunc, error) {
 	tabCtx, tabCancel := chromedp.NewContext(b.browserCtx)
-	if err := chromedp.Do(tabCtx); err != nil {
+	// 同 NewBrowser：Do 必须用原始 tabCtx，超时靠 goroutine + select 兜底。
+	// 超时后这个 tab 本来就要丢弃，cancel 掉它即可让阻塞中的 Do 退出，
+	// 避免半死浏览器上无限等待把当前目标卡住。
+	tabDone := make(chan error, 1)
+	go func() { tabDone <- chromedp.Do(tabCtx) }()
+	select {
+	case err := <-tabDone:
+		if err != nil {
+			tabCancel()
+			return nil, nil, fmt.Errorf("创建标签页失败: %w", err)
+		}
+	case <-time.After(20 * time.Second):
 		tabCancel()
-		return nil, nil, fmt.Errorf("创建标签页失败: %w", err)
+		return nil, nil, fmt.Errorf("创建标签页超时（20s 内未完成 CDP 绑定）")
 	}
 	patterns := resourcePatterns(b.cfg.BlockResourceSuffixes)
 	if len(patterns) > 0 {
@@ -281,6 +305,12 @@ func (b *Browser) Visit(target Target, cookies []Cookie) error {
 
 	ok, reason := b.checkStatus(tabCtx, target)
 	if !ok {
+		// 浏览器已退出时必须走 ErrBrowserClosed：否则会被当成普通站点故障，
+		// visitTarget 不会触发 handleBrowserClosed，剩下几十个站会逐个拿着
+		// 已经死掉的浏览器跑到超时，一轮巡检被拖成几十分钟。
+		if b.browserCtx.Err() != nil || tabCtx.Err() != nil || strings.Contains(reason, "浏览器已关闭") {
+			return b.classify(target, fmt.Errorf("%w: %s", ErrBrowserClosed, reason))
+		}
 		return fmt.Errorf("%s", reason)
 	}
 
@@ -322,12 +352,15 @@ func (b *Browser) warmup(target Target, cookies []Cookie, visitURL string, timeo
 		logf("目标 [%s] 清理前浏览器内 Cookie: %v", target.DisplayName(), names)
 	}
 	if err := b.clearCookiesForHost(tabCtx, host); err != nil {
-		logf("清除域名 [%s] 下的旧 Cookie 失败: %v", host, err)
+		// 旧 Cookie 清不掉时，持久化 profile 里上一轮的会话可能让后面的登录态检查
+		// 假通过（CookieCloud 早已失效却一直显示正常），因此直接判失败。
+		return b.classify(target, fmt.Errorf("清除域名 [%s] 下的旧 Cookie 失败: %w", host, err))
 	}
 
 	// Preserve each source cookie's scope; never rewrite a www cookie to apex.
 	seen := map[string]bool{}
 	injected := 0
+	var injectErrs []string
 	for _, ck := range cookies {
 		key := ck.Name + "|" + ck.Domain + "|" + defaultString(ck.Path, "/") + fmt.Sprint(ck.HostOnly)
 		if seen[key] {
@@ -336,11 +369,18 @@ func (b *Browser) warmup(target Target, cookies []Cookie, visitURL string, timeo
 		seen[key] = true
 		if err := b.addCookieForTarget(tabCtx, ck, target.URL); err != nil {
 			logf("跳过 Cookie [%s]: %v", ck.Name, err)
+			injectErrs = append(injectErrs, ck.Name)
 			continue
 		}
 		injected++
 	}
 	logf("目标 [%s] 成功注入 %d 个 Cookie（去重前 %d 个）", target.DisplayName(), injected, len(cookies))
+	// 解析到了 Cookie 却一个都没注入成功 = 凭据实际不可用。不判失败的话，
+	// profile 里残留的旧会话会让后续检查通过，巡检长期假绿。
+	if len(cookies) > 0 && injected == 0 {
+		return b.classify(target, fmt.Errorf("CookieCloud 解析到 %d 个 Cookie 但注入 0 个（失败项: %s），凭据不可用",
+			len(cookies), strings.Join(injectErrs, ",")))
+	}
 	// document.cookie 看不到 HttpOnly，用 CDP 确认注入是否真的落地。
 	// 之前 Rousi 就是「日志说注入 1 个，页面却是未登录」，靠这条才能分辨是注入失败还是 Cookie 本身失效。
 	if injected > 0 {

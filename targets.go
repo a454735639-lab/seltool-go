@@ -186,6 +186,26 @@ func (s *TargetStore) Find(rawURL string) (Target, bool) {
 func (s *TargetStore) Save(targets []Target) ([]Target, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.saveLocked(targets)
+}
+
+// Update 在写锁内完成「读-改-写」。
+//
+// 面板保存与定时自动导入原来各自 Get() → 合并 → Save()，两步之间没有互斥，
+// 而 Save 是整表替换，并发时后写者会覆盖前者 —— 表现为「用户刚加的目标凭空消失」。
+// 所有需要读后写的调用方都应走这里。
+func (s *TargetStore) Update(mutate func(current []Target) ([]Target, error)) ([]Target, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next, err := mutate(cloneTargets(s.targets))
+	if err != nil {
+		return nil, err
+	}
+	return s.saveLocked(next)
+}
+
+// saveLocked 是 Save 的实现体，调用方必须已持有 s.mu 写锁。
+func (s *TargetStore) saveLocked(targets []Target) ([]Target, error) {
 	replacement := cloneTargets(targets)
 	for i := range replacement {
 		normalizeTarget(&replacement[i])

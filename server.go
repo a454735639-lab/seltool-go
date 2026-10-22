@@ -41,6 +41,8 @@ type Server struct {
 	ptIcons    *PTIconTable
 	mpSync     *MoviePilotSyncStore
 	autoImport *AutoImportStore
+	// loginLimit 登录失败限速（IP + 用户名双维度）。
+	loginLimit *loginLimiter
 }
 
 func NewServer(cfg *Config, accounts *AccountStore, sessions *SessionStore, targets *TargetStore,
@@ -53,7 +55,7 @@ func NewServer(cfg *Config, accounts *AccountStore, sessions *SessionStore, targ
 		history: history, templates: templates, automation: automation, alerts: alerts,
 		settings: settings, cookies: cookies, notify: notify, webhook: webhook,
 		schedule: schedule, scheduler: scheduler, ptSites: ptSites, ptIcons: ptIcons, mpSync: mpSync,
-		autoImport: autoImport,
+		autoImport: autoImport, loginLimit: newLoginLimiter(),
 	}
 }
 
@@ -197,7 +199,7 @@ func (s *Server) ensureSession(w http.ResponseWriter, r *http.Request) (*Session
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil,
+		Secure:   isHTTPS(r),
 		Expires:  time.Now().Add(30 * 24 * time.Hour),
 	})
 	return sess, id
@@ -297,10 +299,27 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	username := strings.TrimSpace(r.PostFormValue("username"))
 	password := r.PostFormValue("password")
 
+	// 限速：同一 IP 或同一用户名连续失败达到阈值即锁定，避免并发撞库。
+	limitKeys := []string{"ip:" + clientIP(r)}
+	if username != "" {
+		limitKeys = append(limitKeys, "user:"+strings.ToLower(username))
+	}
+	if ok, wait := s.loginLimit.Allow(limitKeys...); !ok {
+		minutes := int(wait.Minutes()) + 1
+		logf("登录被限速：来源=%s 用户名=%q 剩余=%s", clientIP(r), username, wait.Round(time.Second))
+		w.Header().Set("Retry-After", fmt.Sprint(int(wait.Seconds())+1))
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{
+			"error": fmt.Sprintf("尝试次数过多，请在 %d 分钟后重试", minutes),
+		})
+		return
+	}
+
 	if !s.accounts.Authenticate(username, password) {
+		s.loginLimit.Fail(limitKeys...)
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "用户名或密码错误"})
 		return
 	}
+	s.loginLimit.Reset(limitKeys...)
 
 	// 登录成功换发新会话，避免会话固定攻击。
 	oldCookie, _ := r.Cookie(sessionCookie)
@@ -314,7 +333,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil,
+		Secure:   isHTTPS(r),
 		Expires:  time.Now().Add(30 * 24 * time.Hour),
 	})
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -421,8 +440,10 @@ func (s *Server) handleRetryFailed(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetCookieCloud(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cookies.Config()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"url":         cfg.URL,
-		"key":         cfg.Key,
+		"url": cfg.URL,
+		// KEY 原文不回显：它是能直接拉走全部 PT 登录态的凭据，
+		// 一旦被 XSS 或肩窥读走，等于把所有站的 cookie 交出去。
+		"hasKey":      strings.TrimSpace(cfg.Key) != "",
 		"hasPassword": strings.TrimSpace(cfg.Password) != "",
 		// 提示前端：地址要填到 API 根，扩展里用的就是这一串
 		"hint": "形如 https://你的域名/apps/cookiecloud",
@@ -440,15 +461,19 @@ func (s *Server) handleSaveCookieCloud(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 前端不回显密码，留空表示沿用当前生效值（可能来自 yaml/env，而不只是设置文件）
+	// 前端不回显 KEY/密码，留空表示沿用当前生效值（可能来自 yaml/env，而不只是设置文件）
 	password := body.Password
 	if strings.TrimSpace(password) == "" {
 		password = s.cookies.Config().Password
 	}
+	key := strings.TrimSpace(body.Key)
+	if key == "" {
+		key = s.cookies.Config().Key
+	}
 
 	saved, err := s.settings.Save(CookieCloudSettings{
 		URL:      body.URL,
-		Key:      body.Key,
+		Key:      key,
 		Password: password,
 	})
 	if err != nil {
@@ -464,7 +489,7 @@ func (s *Server) handleSaveCookieCloud(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"url":         saved.URL,
-		"key":         saved.Key,
+		"hasKey":      strings.TrimSpace(saved.Key) != "",
 		"hasPassword": saved.Password != "",
 		"message":     "已保存并生效",
 	})
@@ -577,10 +602,14 @@ func (s *Server) handleImportTargets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existing := s.targets.Get()
-	added, updated, skipped := mergeTargetsOverwrite(incoming, existing, body.Overwrite)
-	merged := append(existing, added...)
-	saved, err := s.targets.Save(merged)
+	// 读-改-写必须原子：否则与定时自动导入并发时，后写者会覆盖前者。
+	var added []Target
+	var updated, skipped int
+	saved, err := s.targets.Update(func(existing []Target) ([]Target, error) {
+		a, u, sk := mergeTargetsOverwrite(incoming, existing, body.Overwrite)
+		added, updated, skipped = a, u, sk
+		return append(existing, a...), nil
+	})
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
