@@ -239,6 +239,20 @@ func (s *Server) handleWeComCallback(w http.ResponseWriter, r *http.Request) {
 				cmd = "状态"
 			case "RETRY_FAILED":
 				cmd = "重试失败"
+			case "RUN_ALL":
+				cmd = "全部重试"
+			case "FAILED_LIST":
+				cmd = "失败列表"
+			case "IMPORT_SITES":
+				cmd = "站点导入"
+			case "COOKIE_SYNC":
+				cmd = "cookie 更新"
+			case "SCHEDULE_ON":
+				cmd = "恢复定时"
+			case "SCHEDULE_OFF":
+				cmd = "暂停定时"
+			case "RETRY_HINT":
+				cmd = "怎么重试单站"
 			case "HELP":
 				cmd = "帮助"
 			default:
@@ -270,6 +284,23 @@ func (s *Server) dispatchWeComCommand(content string) string {
 		return "可用命令：\n· 状态 —— 查看面板运行状况\n· 重试失败 —— 重试所有失败或从未运行的目标\n· 重试 <站名> —— 重试指定站，例如「重试 星陨阁」\n· 帮助 —— 显示本信息"
 	case lower == "状态" || lower == "status":
 		return s.weComStatusText()
+	case lower == "全部重试" || lower == "runall" || lower == "run all" || lower == "立即执行":
+		if !s.automation.ExecuteAsync("微信指令：全部重试") {
+			return "任务正在执行中，请稍后再试"
+		}
+		return "已提交：开始执行全部目标，完成后会自动推送通知"
+	case lower == "失败列表" || lower == "failed" || lower == "failures":
+		return s.weComFailedListText()
+	case lower == "站点导入" || lower == "import":
+		return s.weComImportSites()
+	case strings.Contains(lower, "cookie"):
+		return s.weComSyncCookies()
+	case lower == "暂停定时" || lower == "pause":
+		return s.weComSetSchedule(false)
+	case lower == "恢复定时" || lower == "resume":
+		return s.weComSetSchedule(true)
+	case lower == "怎么重试单站" || lower == "重试指定站":
+		return "直接发「重试 站名」即可，例如：\n· 重试 星陨阁\n· 重试 高清杜比\n发「状态」可先看失败的是哪些站"
 	case lower == "重试失败" || lower == "retryfailed" || lower == "retry-failed" || lower == "retry all":
 		sub := s.automation.ExecuteFailedAsync()
 		switch sub.Result {
@@ -365,4 +396,91 @@ func (s *Server) weComStatusText() string {
 		}
 	}
 	return b.String()
+}
+
+// weComFailedListText 列出当前失败的目标及原因摘要。
+func (s *Server) weComFailedListText() string {
+	latest := s.history.Latest()
+	targets := s.targets.Get()
+	type row struct{ name, cat, detail string }
+	var rows []row
+	for _, t := range targets {
+		r, ok := latest[t.URL]
+		if !ok || r.Success {
+			continue
+		}
+		cat, detail := classifyFailure(t, r.Message)
+		rows = append(rows, row{t.DisplayName(), cat, detail})
+	}
+	if len(rows) == 0 {
+		return "✅ 当前没有失败的目标"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "失败 %d 个：", len(rows))
+	for _, r := range rows {
+		fmt.Fprintf(&b, "\n· %s —— %s", r.name, r.cat)
+	}
+	b.WriteString("\n\n发「重试失败」可一键重试，或「重试 站名」单独重试")
+	return b.String()
+}
+
+// weComSetSchedule 暂停/恢复定时任务。
+func (s *Server) weComSetSchedule(enabled bool) string {
+	cur := s.schedule.Current()
+	if cur.Enabled == enabled {
+		if enabled {
+			return "定时任务本来就开着：" + cur.Describe
+		}
+		return "定时任务本来就是暂停状态"
+	}
+	cur.Enabled = enabled
+	saved, err := s.schedule.Save(cur)
+	if err != nil {
+		return "保存失败：" + err.Error()
+	}
+	if s.scheduler != nil {
+		if err := s.scheduler.Apply(saved); err != nil {
+			return "应用失败：" + err.Error()
+		}
+	}
+	if enabled {
+		return "已恢复定时任务：" + saved.Describe
+	}
+	return "已暂停定时任务（手动指令仍可用）"
+}
+
+// weComImportSites 从 CookieCloud 识别 PT 站并补充到目标列表（与面板「导入站点」同逻辑）。
+func (s *Server) weComImportSites() string {
+	if s.cookies == nil || s.targets == nil {
+		return "CookieCloud 未配置，无法导入"
+	}
+	data, err := s.cookies.FetchAllCookies()
+	if err != nil {
+		return "拉取 CookieCloud 失败：" + err.Error()
+	}
+	res, err := RunAutoImport(data, s.targets)
+	if err != nil {
+		return "导入失败：" + err.Error()
+	}
+	if len(res.Added) == 0 {
+		return fmt.Sprintf("没有新站点需要导入（已跳过 %d 个已存在的）", res.Skipped)
+	}
+	return fmt.Sprintf("✅ 已导入 %d 个新站点：%s", len(res.Added), strings.Join(res.Added, "、"))
+}
+
+// weComSyncCookies 强制刷新一次 CookieCloud 缓存。
+func (s *Server) weComSyncCookies() string {
+	if s.cookies == nil {
+		return "CookieCloud 未配置"
+	}
+	data, err := s.cookies.FetchAllCookies()
+	if err != nil {
+		return "同步失败：" + err.Error()
+	}
+	syncCookiesOK(data)
+	total := 0
+	for _, list := range data {
+		total += len(list)
+	}
+	return fmt.Sprintf("✅ Cookie 已更新：%d 个域名 / %d 条", len(data), total)
 }

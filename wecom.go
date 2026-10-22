@@ -291,11 +291,22 @@ func (w *WeCom) CreateQuickMenu(statusURL, retryURL string) error {
 	// 不打开网页。view 类型会跳 H5，多一步操作。
 	payload := map[string]any{
 		"button": []any{
+			map[string]any{"type": "click", "name": "查状态", "key": "STATUS"},
 			map[string]any{
-				"type": "click", "name": "查状态", "key": "STATUS",
+				"name": "执行",
+				"sub_button": []any{
+					map[string]any{"type": "click", "name": "立即执行", "key": "RUN_ALL"},
+					map[string]any{"type": "click", "name": "重试失败", "key": "RETRY_FAILED"},
+					map[string]any{"type": "click", "name": "失败列表", "key": "FAILED_LIST"},
+				},
 			},
 			map[string]any{
-				"type": "click", "name": "重试失败", "key": "RETRY_FAILED",
+				"name": "更多",
+				"sub_button": []any{
+					map[string]any{"type": "click", "name": "站点导入", "key": "IMPORT_SITES"},
+					map[string]any{"type": "click", "name": "Cookie 更新", "key": "COOKIE_SYNC"},
+					map[string]any{"type": "click", "name": "帮助", "key": "HELP"},
+				},
 			},
 		},
 	}
