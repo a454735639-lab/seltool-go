@@ -21,7 +21,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE: ghcr.io/${{ github.repository }}
+  IMAGE: ghcr.io/a454735639-lab/seltoolgo
 
 jobs:
   build:
