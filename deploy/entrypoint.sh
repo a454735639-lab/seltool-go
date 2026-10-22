@@ -8,7 +8,12 @@ NOVNC_PORT="${NOVNC_PORT:-7900}"
 # 默认口令 + 端口暴露 = 任何人都能远程看/操作浏览器里的已登录会话。
 VNC_PASSWORD_GENERATED=0
 if [ -z "${SE_VNC_PASSWORD:-}" ]; then
-  SE_VNC_PASSWORD="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16)"
+  # 注意别用 `tr </dev/urandom | head -c 16`：head 提前关管道会让 tr 收到
+  # SIGPIPE，配合 set -o pipefail 直接 141 退出，容器连一行日志都不打。
+  SE_VNC_PASSWORD="$(head -c 4096 /dev/urandom | tr -dc 'A-Za-z0-9' | cut -c1-16)"
+  if [ "${#SE_VNC_PASSWORD}" -lt 12 ]; then
+    SE_VNC_PASSWORD="$(date +%s%N | sha256sum | cut -c1-16)"
+  fi
   VNC_PASSWORD_GENERATED=1
 fi
 export SE_VNC_PASSWORD
