@@ -247,6 +247,8 @@ func (s *Server) handleWeComCallback(w http.ResponseWriter, r *http.Request) {
 				cmd = "站点导入"
 			case "COOKIE_SYNC":
 				cmd = "cookie 更新"
+			case "SYNC_SITES_TABLE":
+				cmd = "站点名表同步"
 			case "SCHEDULE_ON":
 				cmd = "恢复定时"
 			case "SCHEDULE_OFF":
@@ -261,8 +263,21 @@ func (s *Server) handleWeComCallback(w http.ResponseWriter, r *http.Request) {
 			logf("wecom 菜单点击 event=%s key=%s → 命令=%q", msg.Event, msg.EventKey, cmd)
 		}
 		reply := s.dispatchWeComCommand(cmd)
-		logf("wecom 回复 from=%s: %q", msg.FromUser, reply)
-		resp, err := crypt.encryptedResponse(textReplyXML(msg.FromUser, msg.ToUser, reply), ts, nonce)
+		logf("wecom 执行完成 from=%s: %q", msg.FromUser, reply)
+
+		// 企微对 event 消息的被动回复常常不显示（实测点了菜单没反应，
+		// 但服务端日志显示回复已生成）。改为：立即回空串 ACK 结束本次回调，
+		// 再用应用消息 API 主动推送给发送者 —— 这条一定能在会话里看到。
+		target := strings.TrimSpace(msg.FromUser)
+		text := reply
+		go func() {
+			defer recoverAndLog("wecom 主动回复")
+			wc := NewWeCom(ns.toConfig())
+			wc.SendTo(target, text)
+		}()
+
+		// ACK：返回空加密串，企微视为「已收到、无被动回复」，不会重试
+		resp, err := crypt.encryptedResponse("", ts, nonce)
 		if err != nil {
 			logf("wecom 加密回复失败: %v", err)
 			http.Error(w, "encrypt reply failed", http.StatusInternalServerError)
@@ -293,6 +308,8 @@ func (s *Server) dispatchWeComCommand(content string) string {
 		return s.weComFailedListText()
 	case lower == "站点导入" || lower == "import":
 		return s.weComImportSites()
+	case lower == "站点名表同步" || lower == "syncsites":
+		return s.weComSyncSiteTable()
 	case strings.Contains(lower, "cookie"):
 		return s.weComSyncCookies()
 	case lower == "暂停定时" || lower == "pause":
@@ -483,4 +500,20 @@ func (s *Server) weComSyncCookies() string {
 		total += len(list)
 	}
 	return fmt.Sprintf("✅ Cookie 已更新：%d 个域名 / %d 条", len(data), total)
+}
+
+// weComSyncSiteTable 从 MoviePilot 同步站点名表（与面板「站点名表」同逻辑）。
+func (s *Server) weComSyncSiteTable() string {
+	if s.mpSync == nil || s.ptSites == nil {
+		return "MoviePilot 或站点表未初始化"
+	}
+	cfg := s.mpSync.Current()
+	if strings.TrimSpace(cfg.URL) == "" || strings.TrimSpace(cfg.Token) == "" {
+		return "MoviePilot 未配置，请先在面板填地址和 Token"
+	}
+	n, err := SyncFromMoviePilot(cfg, s.ptSites)
+	if err != nil {
+		return "同步失败：" + err.Error()
+	}
+	return fmt.Sprintf("✅ 站点名表已同步：%d 个站点", n)
 }

@@ -301,9 +301,10 @@ func (w *WeCom) CreateQuickMenu(statusURL, retryURL string) error {
 				},
 			},
 			map[string]any{
-				"name": "更多",
+				"name": "同步",
 				"sub_button": []any{
 					map[string]any{"type": "click", "name": "站点导入", "key": "IMPORT_SITES"},
+					map[string]any{"type": "click", "name": "站点名表", "key": "SYNC_SITES_TABLE"},
 					map[string]any{"type": "click", "name": "Cookie 更新", "key": "COOKIE_SYNC"},
 					map[string]any{"type": "click", "name": "帮助", "key": "HELP"},
 				},
@@ -311,4 +312,12 @@ func (w *WeCom) CreateQuickMenu(statusURL, retryURL string) error {
 		},
 	}
 	return w.postJSON(endpoint, payload)
+}
+
+// SendTo 主动给指定用户发一条消息（用于回调后的异步回复）。
+func (w *WeCom) SendTo(touser, content string) {
+	cfg := w.cfg
+	cfg.ToUser = touser
+	tmp := NewWeCom(cfg)
+	tmp.Send("", content)
 }
