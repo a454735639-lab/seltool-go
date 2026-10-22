@@ -472,12 +472,12 @@ func (s *Server) handleSaveCookieCloud(w http.ResponseWriter, r *http.Request) {
 
 // handleCandidates 预览从 CookieCloud 识别到的 PT 站，不落盘。
 func (s *Server) handleCandidates(w http.ResponseWriter, r *http.Request) {
-	data, err := s.cookies.FetchAllCookies()
+	data, lsData, err := s.cookies.FetchAll()
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "CookieCloud 获取失败：" + err.Error()})
 		return
 	}
-	domains := detectPTSites(data)
+	domains := detectPTSitesWithStorage(data, lsData)
 
 	// 标出哪些已经在目标列表里：全都在时不该只显示「未识别到 PT 站」，
 	// 那会让人以为识别功能坏了。
@@ -493,6 +493,20 @@ func (s *Server) handleCandidates(w http.ResponseWriter, r *http.Request) {
 		Domain string `json:"domain"`
 		Name   string `json:"name"`
 		Exists bool   `json:"exists"`
+		Source string `json:"source"` // cookie / localStorage / both
+	}
+	// 统计每个归一化域名带哪些凭据，前端可据此提示「该站靠 localStorage 登录」
+	cookieDom := map[string]bool{}
+	for raw, list := range data {
+		if len(list) > 0 {
+			cookieDom[normalizeDomain(raw)] = true
+		}
+	}
+	lsDom := map[string]bool{}
+	for raw, list := range lsData {
+		if len(list) > 0 {
+			lsDom[normalizeDomain(raw)] = true
+		}
 	}
 	list := make([]candidate, 0, len(domains))
 	fresh := 0
@@ -502,7 +516,16 @@ func (s *Server) handleCandidates(w http.ResponseWriter, r *http.Request) {
 		if !exists {
 			fresh++
 		}
-		list = append(list, candidate{Domain: host, Name: siteDisplayName(host), Exists: exists})
+		source := ""
+		switch {
+		case cookieDom[host] && lsDom[host]:
+			source = "both"
+		case lsDom[host]:
+			source = "localStorage"
+		case cookieDom[host]:
+			source = "cookie"
+		}
+		list = append(list, candidate{Domain: host, Name: siteDisplayName(host), Exists: exists, Source: source})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"candidates": list,
@@ -531,12 +554,12 @@ func (s *Server) handleImportTargets(w http.ResponseWriter, r *http.Request) {
 			incoming = targetsFromDomains(body.Domains)
 			break
 		}
-		data, err := s.cookies.FetchAllCookies()
+		data, lsData, err := s.cookies.FetchAll()
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "CookieCloud 获取失败：" + err.Error()})
 			return
 		}
-		domains := detectPTSites(data)
+		domains := detectPTSitesWithStorage(data, lsData)
 		if len(domains) == 0 {
 			writeJSON(w, http.StatusOK, map[string]any{"imported": 0, "skipped": 0, "names": []string{},
 				"message": "没有识别到 PT 站，请确认 CookieCloud 里有数据"})
@@ -985,7 +1008,7 @@ func (s *Server) handleSyncCookieCloud(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := time.Now()
-	data, err := s.cookies.FetchAllCookies()
+	data, lsData, err := s.cookies.FetchAll()
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{
 			"ok":    false,
@@ -998,12 +1021,19 @@ func (s *Server) handleSyncCookieCloud(w http.ResponseWriter, r *http.Request) {
 	for _, list := range data {
 		total += len(list)
 	}
+	lsTotal := 0
+	for _, list := range lsData {
+		lsTotal += len(list)
+	}
 	msg := fmt.Sprintf("同步成功：%d 个域名 / %d 条 Cookie", len(data), total)
+	if lsTotal > 0 {
+		msg += fmt.Sprintf("，%d 个域名 / %d 条 localStorage", len(lsData), lsTotal)
+	}
 
 	// CookieCloud 里出现的新 PT 站，按开关自动加入目标列表
 	added := []string{}
 	if s.autoImport != nil && s.autoImport.Current().Enabled && s.targets != nil {
-		if res, err := RunAutoImport(data, s.targets); err != nil {
+		if res, err := RunAutoImport(data, lsData, s.targets); err != nil {
 			logf("自动导入失败: %v", err)
 		} else if len(res.Added) > 0 {
 			added = res.Added

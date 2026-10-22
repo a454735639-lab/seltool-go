@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.0.2 (2026-10-22)
+
+### 修复：只存在于 localStorage 的站点无法导入
+- **根因**：导入候选（`detectPTSites`）只扫描 `cookie_data` 的域名。
+  像馒头（M-Team）这类登录态只写在 localStorage、没有有效 cookie 的站点，
+  永远进不了候选列表，也无法自动导入。
+- 新增 `detectPTSitesWithStorage()`：同时扫描 `cookie_data` 与 `local_storage_data` 的域名，
+  任一来源命中即视为可用站点（`detectPTSites` 保留为兼容包装）
+- `RunAutoImport()` 增加 `lsData` 参数；**只要 cookie 或 localStorage 任一非空**即继续，
+  不再因 cookie 为空而直接返回
+- 全部调用点已更新：手动同步 `/api/cookiecloud/sync`、候选预览 `/api/.../candidates`、
+  导入 `/api/.../import`、每日定时同步（`main.go`）、企业微信「同步 Cookie」「导入站点」
+- 候选接口新增 `source` 字段（`cookie` / `localStorage` / `both`），便于定位站点靠哪种凭据登录
+- 同步结果文案带出 localStorage 统计（有数据时才显示，避免噪音）
+- 企业微信「缺 Cookie」改称「缺凭据」，localStorage 也算凭据
+
+### 说明
+- 需 CookieCloud 扩展开启「同步 LocalStorage」且服务端 `local_storage_data` 非空才有效果；
+  为空时行为与 1.0.1 完全一致
+
+### 测试
+- `go build ./...` / `go vet ./...` / `go test ./...` 全部通过
+
 ## 1.0.1 (2026-10-22)
 
 ### 新增：CookieCloud 同步 localStorage

@@ -135,7 +135,7 @@ func run() error {
 		}
 		syncScheduler = cron.New(cron.WithSeconds(), cron.WithLocation(loc))
 		if _, e := syncScheduler.AddFunc(syncCron, func() {
-			data, err := cookies.FetchAllCookies()
+			data, lsData, err := cookies.FetchAll()
 			if err != nil {
 				log.Printf("CookieCloud 每日同步失败: %v", err)
 				return
@@ -145,9 +145,18 @@ func run() error {
 			for _, list := range data {
 				total += len(list)
 			}
-			log.Printf("CookieCloud 每日同步完成：%d 个域名 / %d 条 Cookie", len(data), total)
+			lsTotal := 0
+			for _, list := range lsData {
+				lsTotal += len(list)
+			}
+			if lsTotal > 0 {
+				log.Printf("CookieCloud 每日同步完成：%d 个域名 / %d 条 Cookie，%d 个域名 / %d 条 localStorage",
+					len(data), total, len(lsData), lsTotal)
+			} else {
+				log.Printf("CookieCloud 每日同步完成：%d 个域名 / %d 条 Cookie", len(data), total)
+			}
 			if aiCfg.Enabled {
-				res, e := RunAutoImport(data, targets)
+				res, e := RunAutoImport(data, lsData, targets)
 				if e != nil {
 					log.Printf("自动导入新站点失败: %v", e)
 				} else if len(res.Added) > 0 {

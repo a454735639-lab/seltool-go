@@ -52,18 +52,31 @@ func siteDisplayName(host string) string {
 // detectPTSites 从 cookie_data 里挑出 PT 站域名，保留真实 host（含 www.），仅去点前缀并按 host 去重。
 // 保留 www 的原因：cookie 往往只对 www 域有效，剥掉后新目标会拿不到登录态。
 func detectPTSites(data map[string][]Cookie) []string {
+	return detectPTSitesWithStorage(data, nil)
+}
+
+// detectPTSitesWithStorage 同时扫描 cookie_data 与 local_storage_data 的域名。
+// 有些站点（如馒头 M-Team）登录态只存 localStorage、没有有效 cookie，
+// 只扫 cookie_data 会漏掉它们。
+func detectPTSitesWithStorage(data map[string][]Cookie, lsData map[string][]LocalStorage) []string {
 	seen := map[string]bool{}
 	out := make([]string, 0, 16)
-	for raw := range data {
+	add := func(raw string) {
 		d := normalizeDomain(raw) // 只去前导点、小写
 		if d == "" {
-			continue
+			return
 		}
 		if !isPTSite(d) || seen[d] {
-			continue
+			return
 		}
 		seen[d] = true
 		out = append(out, d)
+	}
+	for raw := range data {
+		add(raw)
+	}
+	for raw := range lsData {
+		add(raw)
 	}
 	sort.Strings(out)
 	return out

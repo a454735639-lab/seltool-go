@@ -86,13 +86,13 @@ func (r AutoImportResult) Summary() string {
 //
 // 这是「CookieCloud 出现新站 → 自动加入」的唯一实现，手动同步与每日自动同步共用，
 // 保证两条路径行为一致。去重沿用注册域名规则（www 与 apex 视为同一站）。
-func RunAutoImport(data map[string][]Cookie, store *TargetStore) (AutoImportResult, error) {
+func RunAutoImport(data map[string][]Cookie, lsData map[string][]LocalStorage, store *TargetStore) (AutoImportResult, error) {
 	var out AutoImportResult
-	if store == nil || len(data) == 0 {
+	if store == nil || (len(data) == 0 && len(lsData) == 0) {
 		return out, nil
 	}
 
-	domains := detectPTSites(data)
+	domains := detectPTSitesWithStorage(data, lsData)
 	if len(domains) == 0 {
 		return out, nil
 	}

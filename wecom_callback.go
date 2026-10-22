@@ -471,11 +471,11 @@ func (s *Server) weComImportSites() string {
 	if s.cookies == nil || s.targets == nil {
 		return "CookieCloud 未配置，无法导入"
 	}
-	data, err := s.cookies.FetchAllCookies()
+	data, lsData, err := s.cookies.FetchAll()
 	if err != nil {
 		return "拉取 CookieCloud 失败：" + err.Error()
 	}
-	res, err := RunAutoImport(data, s.targets)
+	res, err := RunAutoImport(data, lsData, s.targets)
 	if err != nil {
 		return "导入失败：" + err.Error()
 	}
@@ -490,7 +490,7 @@ func (s *Server) weComSyncCookies() string {
 	if s.cookies == nil {
 		return "CookieCloud 未配置"
 	}
-	data, err := s.cookies.FetchAllCookies()
+	data, lsData, err := s.cookies.FetchAll()
 	if err != nil {
 		return "同步失败：" + err.Error()
 	}
@@ -504,7 +504,15 @@ func (s *Server) weComSyncCookies() string {
 		have[d] = true
 		have[registeredDomain(d)] = true
 	}
-	ptSites := detectPTSites(data)
+	// localStorage 也算凭据：馒头这类站登录态只在 localStorage，没有有效 cookie
+	lsTotal := 0
+	for domain, list := range lsData {
+		lsTotal += len(list)
+		d := normalizeDomain(domain)
+		have[d] = true
+		have[registeredDomain(d)] = true
+	}
+	ptSites := detectPTSitesWithStorage(data, lsData)
 
 	targets := s.targets.Get()
 	var missing []string
@@ -520,10 +528,14 @@ func (s *Server) weComSyncCookies() string {
 
 	var b strings.Builder
 	b.WriteString("✅ Cookie 已更新\n")
-	fmt.Fprintf(&b, "识别 PT 站 %d 个（共 %d 个域名 / %d 条 Cookie）\n", len(ptSites), len(data), total)
-	fmt.Fprintf(&b, "目标 %d 个，有 Cookie %d 个", len(targets), len(targets)-len(missing))
+	fmt.Fprintf(&b, "识别 PT 站 %d 个（共 %d 个域名 / %d 条 Cookie", len(ptSites), len(data), total)
+	if lsTotal > 0 {
+		fmt.Fprintf(&b, "，另有 %d 个域名 / %d 条 localStorage", len(lsData), lsTotal)
+	}
+	b.WriteString("）\n")
+	fmt.Fprintf(&b, "目标 %d 个，有凭据 %d 个", len(targets), len(targets)-len(missing))
 	if len(missing) > 0 {
-		fmt.Fprintf(&b, "\n缺 Cookie %d 个：%s", len(missing), strings.Join(missing, "、"))
+		fmt.Fprintf(&b, "\n缺凭据 %d 个：%s", len(missing), strings.Join(missing, "、"))
 	}
 	return b.String()
 }
