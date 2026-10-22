@@ -167,11 +167,13 @@ func containsWeComUser(whitelist, fromUser string) bool {
 func (s *Server) handleWeComCallback(w http.ResponseWriter, r *http.Request) {
 	ns := s.notify.Current()
 	if !ns.CallbackEnabled {
+		logf("wecom 回调未启用，拒绝 %s %s", r.Method, r.URL.Path)
 		http.Error(w, "callback disabled", http.StatusForbidden)
 		return
 	}
 	crypt, err := NewWXBizMsgCrypt(strings.TrimSpace(ns.CallbackToken), strings.TrimSpace(ns.CallbackAESKey), strings.TrimSpace(ns.CorpID))
 	if err != nil {
+		logf("wecom 回调配置错误: %v", err)
 		http.Error(w, "bad callback config: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -180,52 +182,64 @@ func (s *Server) handleWeComCallback(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		sig, ts, nonce := q.Get("msg_signature"), q.Get("timestamp"), q.Get("nonce")
 		echostr := q.Get("echostr")
+		logf("wecom GET 验证: ts=%s nonce=%s 签名匹配=%v echostr_len=%d", ts, nonce, crypt.Sign(ts, nonce, echostr) == sig, len(echostr))
 		if crypt.Sign(ts, nonce, echostr) != sig {
 			http.Error(w, "bad signature", http.StatusForbidden)
 			return
 		}
 		plain, err := crypt.Decrypt(echostr)
 		if err != nil {
+			logf("wecom GET 解密 echostr 失败: %v", err)
 			http.Error(w, "decrypt failed", http.StatusBadRequest)
 			return
 		}
+		logf("wecom GET 验证成功，回显 %d 字", len(plain))
 		w.Header().Set("Content-Type", "text/plain")
 		io.WriteString(w, plain)
 	case http.MethodPost:
 		body, _ := io.ReadAll(r.Body)
 		var req weComEncryptReq
 		if err := xml.Unmarshal(body, &req); err != nil {
+			logf("wecom POST 解析 XML 失败: %v", err)
 			http.Error(w, "bad xml body", http.StatusBadRequest)
 			return
 		}
 		ts, nonce, sig := q.Get("timestamp"), q.Get("nonce"), q.Get("msg_signature")
+		logf("wecom POST 收到（密文 %d 字）签名匹配=%v ts=%s nonce=%s", len(req.Encrypt), crypt.Sign(ts, nonce, req.Encrypt) == sig, ts, nonce)
 		if crypt.Sign(ts, nonce, req.Encrypt) != sig {
 			http.Error(w, "bad signature", http.StatusForbidden)
 			return
 		}
 		plainXML, err := crypt.Decrypt(req.Encrypt)
 		if err != nil {
+			logf("wecom POST 解密失败: %v", err)
 			http.Error(w, "decrypt failed: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		var msg weComTextMsg
 		if err := xml.Unmarshal([]byte(plainXML), &msg); err != nil {
+			logf("wecom 解析消息失败: %v（明文前100: %.100s）", err, plainXML)
 			http.Error(w, "bad message", http.StatusBadRequest)
 			return
 		}
+		logf("wecom 收到消息 from=%s msgtype=%s content=%q", msg.FromUser, msg.MsgType, msg.Content)
 		if !containsWeComUser(ns.CallbackOwner, msg.FromUser) {
+			logf("wecom 白名单拒绝 from=%s whitelist=%q", msg.FromUser, ns.CallbackOwner)
 			http.Error(w, "forbidden: sender not in whitelist", http.StatusForbidden)
 			return
 		}
 		reply := s.dispatchWeComCommand(strings.TrimSpace(msg.Content))
+		logf("wecom 回复 from=%s: %q", msg.FromUser, reply)
 		resp, err := crypt.encryptedResponse(textReplyXML(msg.FromUser, msg.ToUser, reply), ts, nonce)
 		if err != nil {
+			logf("wecom 加密回复失败: %v", err)
 			http.Error(w, "encrypt reply failed", http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/xml")
 		io.WriteString(w, resp)
 	default:
+		logf("wecom 方法不允许: %s", r.Method)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }

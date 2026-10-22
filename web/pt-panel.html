@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>PT 保活 · 快捷指令</title>
+<style>
+:root{--bg:#0f1218;--card:#171c26;--card2:#1e2430;--line:#2a3345;--txt:#e6edf7;--sub:#8a97ad;--ok:#3fb950;--bad:#f85149;--acc:#4f8af0;--warn:#d2992a}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.6 -apple-system,"PingFang SC",sans-serif;min-height:100vh}
+.wrap{max-width:520px;margin:0 auto;padding:14px 14px 40px}
+h1{font-size:17px;margin:4px 0 2px}
+.sub{color:var(--sub);font-size:12px;margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+.status{display:flex;gap:10px}
+.stat{flex:1;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;text-align:center}
+.stat b{display:block;font-size:22px;line-height:1.2}
+.stat span{color:var(--sub);font-size:11px}
+.stat.ok b{color:var(--ok)}.stat.bad b{color:var(--bad)}
+.run{margin-left:auto;color:var(--sub);font-size:12px;align-self:center}
+.run.live{color:var(--acc)}
+.btns{display:flex;gap:8px;margin-bottom:12px}
+button{flex:1;border:1px solid var(--line);background:var(--card2);color:var(--txt);border-radius:10px;padding:11px;font-size:14px;cursor:pointer}
+button:active{background:#2a3345}
+button.primary{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+.fail{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:4px 12px}
+.fail h2{font-size:13px;color:var(--sub);font-weight:600;margin:10px 0 6px}
+.row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:none}
+.row .nm{font-weight:600}
+.row .rs{color:var(--sub);font-size:12px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row button{flex:none;padding:7px 14px;font-size:13px}
+.msg{min-height:18px;color:var(--sub);font-size:13px;margin-top:10px}
+.msg.ok{color:var(--ok)}.msg.err{color:var(--bad)}
+.empty{text-align:center;color:var(--sub);padding:24px 0}
+.nokey{max-width:420px;margin:60px auto;text-align:center;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px}
+.nokey code{background:var(--card2);padding:3px 7px;border-radius:6px;color:var(--acc);word-break:break-all}
+</style>
+</head>
+<body>
+<div class="wrap" id="wrap" style="display:none">
+  <h1>PT 保活 · 快捷指令</h1>
+  <div class="sub">selenium-tool 面板 · 手机快捷操作</div>
+
+  <div class="card">
+    <div class="status">
+      <div class="stat"><b id="s-total">-</b><span>目标</span></div>
+      <div class="stat ok"><b id="s-ok">-</b><span>成功</span></div>
+      <div class="stat bad"><b id="s-bad">-</b><span>失败</span></div>
+      <div class="run" id="s-run">…</div>
+    </div>
+  </div>
+
+  <div class="btns">
+    <button class="primary" id="b-all">🔁 重试所有失败</button>
+    <button id="b-refresh">📊 刷新</button>
+  </div>
+
+  <div class="fail" id="fail-wrap" style="display:none">
+    <h2 id="fail-title">失败站点</h2>
+    <div id="fail-list"></div>
+  </div>
+
+  <div class="msg" id="msg"></div>
+</div>
+
+<div class="nokey" id="nokey" style="display:none">
+  <p>此快捷页需要访问密钥。</p>
+  <p>请通过企业微信工作台菜单打开，或在面板「通知设置 → 快捷指令页」拿到密钥。</p>
+</div>
+
+<script>
+const KEY = new URLSearchParams(location.search).get('k') || '';
+const qs = () => 'key=' + encodeURIComponent(KEY);
+const $ = id => document.getElementById(id);
+
+function showMsg(t, cls) { const m = $('msg'); m.textContent = t; m.className = 'msg ' + (cls || ''); }
+async function api(path, method, body) {
+  let url = path + (path.includes('?') ? '&' : '?') + qs();
+  const opt = { method, headers: {} };
+  if (body) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
+  const r = await fetch(url, opt);
+  let d; try { d = await r.json(); } catch (e) { d = {}; }
+  if (!r.ok) throw Error(d.error || ('HTTP ' + r.status));
+  return d;
+}
+async function load() {
+  if (!KEY) { $('nokey').style.display = 'block'; return; }
+  $('nokey').style.display = 'none'; $('wrap').style.display = 'block';
+  try {
+    const d = await api('/api/pt-panel/summary', 'GET');
+    $('s-total').textContent = d.total;
+    $('s-ok').textContent = d.success;
+    $('s-bad').textContent = d.failed;
+    const run = $('s-run');
+    run.textContent = d.running ? '运行中' : '空闲';
+    run.className = 'run' + (d.running ? ' live' : '');
+    const fail = d.failedList || [];
+    const fw = $('fail-wrap');
+    if (fail.length) {
+      fw.style.display = 'block';
+      $('fail-title').textContent = '失败站点（' + fail.length + '）';
+      $('fail-list').innerHTML = fail.map((x, i) =>
+        '<div class="row"><span class="nm">' + esc(x.name) + '</span>' +
+        '<span class="rs">' + esc(x.reason) + '</span>' +
+        '<button onclick="retryOne(' + i + ')">重试</button></div>').join('');
+      window.__fail = fail;
+    } else {
+      fw.style.display = 'none';
+    }
+  } catch (e) { showMsg('加载失败：' + e.message, 'err'); }
+}
+function retryOne(i) {
+  const t = (window.__fail || [])[i];
+  if (!t) return;
+  showMsg('已提交重试「' + t.name + '」，稍后自动刷新…');
+  api('/api/pt-panel/retry?url=' + encodeURIComponent(t.url), 'POST').then(() => setTimeout(load, 2000)).catch(e => showMsg(e.message, 'err'));
+}
+$('b-all').onclick = () => {
+  showMsg('已提交：重试所有失败目标…');
+  api('/api/pt-panel/retry-failed', 'POST').then(() => setTimeout(load, 2500)).catch(e => showMsg(e.message, 'err'));
+};
+$('b-refresh').onclick = () => load();
+function esc(s) { return String(s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

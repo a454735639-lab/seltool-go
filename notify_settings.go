@@ -25,18 +25,20 @@ type NotifySettings struct {
 	CallbackToken   string `json:"callbackToken"`
 	CallbackAESKey  string `json:"callbackAesKey"`
 	CallbackOwner   string `json:"callbackOwner"`
+	// 快捷指令 H5 页访问密钥（非空即启用 /pt-panel 数据接口）。
+	PanelKey string `json:"panelKey"`
 }
 
 func (s NotifySettings) toConfig() WeComConfig {
 	return WeComConfig{
-		Mode:       s.Mode,
-		WebhookURL: strings.TrimSpace(s.WebhookURL),
-		MsgType:    s.MsgType,
-		CorpID:     strings.TrimSpace(s.CorpID),
-		CorpSecret: strings.TrimSpace(s.CorpSecret),
-		AgentID:    s.AgentID,
-		ToUser:     strings.TrimSpace(s.ToUser),
-		Proxy:      strings.TrimSpace(s.Proxy),
+		Mode:            s.Mode,
+		WebhookURL:      strings.TrimSpace(s.WebhookURL),
+		MsgType:         s.MsgType,
+		CorpID:          strings.TrimSpace(s.CorpID),
+		CorpSecret:      strings.TrimSpace(s.CorpSecret),
+		AgentID:         s.AgentID,
+		ToUser:          strings.TrimSpace(s.ToUser),
+		Proxy:           strings.TrimSpace(s.Proxy),
 		CallbackEnabled: s.CallbackEnabled,
 		CallbackToken:   strings.TrimSpace(s.CallbackToken),
 		CallbackAESKey:  strings.TrimSpace(s.CallbackAESKey),
@@ -102,6 +104,7 @@ func (s *NotifyStore) Save(in NotifySettings) (NotifySettings, error) {
 		in.CallbackAESKey = s.cur.CallbackAESKey
 	}
 	in.CallbackOwner = strings.TrimSpace(in.CallbackOwner)
+	in.PanelKey = strings.TrimSpace(in.PanelKey)
 	if in.MsgType == "" {
 		in.MsgType = "markdown"
 	}
@@ -116,19 +119,20 @@ func (s *NotifyStore) Save(in NotifySettings) (NotifySettings, error) {
 // mask 返回给前端的视图：敏感字段只给是否已配置。
 func (s NotifySettings) mask() map[string]any {
 	return map[string]any{
-		"mode":          s.Mode,
-		"webhookUrl":    s.WebhookURL,
-		"msgType":       s.MsgType,
-		"corpId":        s.CorpID,
-		"agentId":       s.AgentID,
-		"toUser":        s.ToUser,
-		"proxy":         s.Proxy,
-		"onlyOnFailure": s.OnlyOnFailure,
-		"hasCorpSecret": strings.TrimSpace(s.CorpSecret) != "",
+		"mode":              s.Mode,
+		"webhookUrl":        s.WebhookURL,
+		"msgType":           s.MsgType,
+		"corpId":            s.CorpID,
+		"agentId":           s.AgentID,
+		"toUser":            s.ToUser,
+		"proxy":             s.Proxy,
+		"onlyOnFailure":     s.OnlyOnFailure,
+		"hasCorpSecret":     strings.TrimSpace(s.CorpSecret) != "",
 		"callbackEnabled":   s.CallbackEnabled,
 		"callbackToken":     s.CallbackToken,
 		"callbackOwner":     s.CallbackOwner,
 		"hasCallbackAESKey": strings.TrimSpace(s.CallbackAESKey) != "",
-		"enabled":       NewWeCom(s.toConfig()).Enabled(),
+		"panelKey":          s.PanelKey,
+		"enabled":           NewWeCom(s.toConfig()).Enabled(),
 	}
 }

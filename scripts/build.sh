@@ -35,7 +35,11 @@ die() { printf '\033[31m[build] 失败：%s\033[0m\n' "$*" >&2; exit 1; }
 if [ "$REBUILD_BASE" = "1" ]; then
   log "重建基础镜像 $BASE_IMAGE（从当前生产镜像剥离业务文件）"
   docker rm -f tmpbase >/dev/null 2>&1 || true
-  docker run -d --name tmpbase --entrypoint sleep "$IMAGE" infinity >/dev/null
+  PROD_IMAGE=$(grep "^IMAGE=" "$DEPLOY/.env" 2>/dev/null | cut -d= -f2)
+  [ -z "$PROD_IMAGE" ] && PROD_IMAGE="$IMAGE"
+  docker image inspect "$PROD_IMAGE" >/dev/null 2>&1 || die "剥离源 $PROD_IMAGE 不存在，先 docker pull"
+  log "剥离源：$PROD_IMAGE"
+  docker run -d --name tmpbase --entrypoint sleep "$PROD_IMAGE" infinity >/dev/null
   docker exec tmpbase rm -f /app/seltool /app/vncproxy /app/entrypoint.sh
   docker export tmpbase | docker import - "$BASE_IMAGE" \
     --change 'ENTRYPOINT ["/usr/bin/tini","--","/app/entrypoint.sh"]' >/dev/null

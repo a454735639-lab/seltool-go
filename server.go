@@ -119,6 +119,11 @@ func (s *Server) Handler() http.Handler {
 	// 企业微信「接收消息」回调（企微服务器调用，公开、按白名单鉴权）
 	mux.HandleFunc("GET /wecom/callback", s.handleWeComCallback)
 	mux.HandleFunc("POST /wecom/callback", s.handleWeComCallback)
+	// 企业微信工作台 H5 快捷指令页（页面公开，数据靠 ?key= 鉴权）
+	mux.HandleFunc("GET /pt-panel", func(w http.ResponseWriter, r *http.Request) { serveEmbedded(w, r, static, "pt-panel.html") })
+	mux.HandleFunc("GET /api/pt-panel/summary", s.handlePanelSummary)
+	mux.HandleFunc("POST /api/pt-panel/retry-failed", s.handlePanelRetryFailed)
+	mux.HandleFunc("POST /api/pt-panel/retry", s.handlePanelRetry)
 	mux.HandleFunc("GET /api/settings/schedule", s.requireAuth(s.handleGetSchedule))
 	mux.HandleFunc("PUT /api/settings/schedule", s.requireAuth(s.requireCSRF(s.handleSaveSchedule)))
 	mux.HandleFunc("GET /api/settings/schedule/presets", s.requireAuth(s.handleSchedulePresets))
