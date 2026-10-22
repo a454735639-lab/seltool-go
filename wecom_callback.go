@@ -485,7 +485,7 @@ func (s *Server) weComImportSites() string {
 	return fmt.Sprintf("✅ 已导入 %d 个新站点：%s", len(res.Added), strings.Join(res.Added, "、"))
 }
 
-// weComSyncCookies 强制刷新一次 CookieCloud 缓存。
+// weComSyncCookies 刷新 CookieCloud 缓存，并反馈 PT 站的覆盖情况。
 func (s *Server) weComSyncCookies() string {
 	if s.cookies == nil {
 		return "CookieCloud 未配置"
@@ -495,11 +495,37 @@ func (s *Server) weComSyncCookies() string {
 		return "同步失败：" + err.Error()
 	}
 	syncCookiesOK(data)
+
 	total := 0
-	for _, list := range data {
+	have := map[string]bool{}
+	for domain, list := range data {
 		total += len(list)
+		d := normalizeDomain(domain)
+		have[d] = true
+		have[registeredDomain(d)] = true
 	}
-	return fmt.Sprintf("✅ Cookie 已更新：%d 个域名 / %d 条", len(data), total)
+	ptSites := detectPTSites(data)
+
+	targets := s.targets.Get()
+	var missing []string
+	for _, t := range targets {
+		h := normalizeDomain(hostOf(t.URL))
+		if h == "" {
+			continue
+		}
+		if !have[h] && !have[registeredDomain(h)] {
+			missing = append(missing, t.DisplayName())
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("✅ Cookie 已更新\n")
+	fmt.Fprintf(&b, "识别 PT 站 %d 个（共 %d 个域名 / %d 条 Cookie）\n", len(ptSites), len(data), total)
+	fmt.Fprintf(&b, "目标 %d 个，有 Cookie %d 个", len(targets), len(targets)-len(missing))
+	if len(missing) > 0 {
+		fmt.Fprintf(&b, "\n缺 Cookie %d 个：%s", len(missing), strings.Join(missing, "、"))
+	}
+	return b.String()
 }
 
 // weComSyncSiteTable 从 MoviePilot 同步站点名表（与面板「站点名表」同逻辑）。

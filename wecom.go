@@ -304,7 +304,7 @@ func (w *WeCom) CreateQuickMenu(statusURL, retryURL string) error {
 				"name": "同步",
 				"sub_button": []any{
 					map[string]any{"type": "click", "name": "站点导入", "key": "IMPORT_SITES"},
-					map[string]any{"type": "click", "name": "站点名表", "key": "SYNC_SITES_TABLE"},
+					map[string]any{"type": "click", "name": "同步站点名", "key": "SYNC_SITES_TABLE"},
 					map[string]any{"type": "click", "name": "Cookie 更新", "key": "COOKIE_SYNC"},
 					map[string]any{"type": "click", "name": "帮助", "key": "HELP"},
 				},
