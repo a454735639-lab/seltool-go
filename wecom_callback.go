@@ -140,6 +140,8 @@ type weComTextMsg struct {
 	ToUser   string   `xml:"ToUserName"`
 	MsgType  string   `xml:"MsgType"`
 	Content  string   `xml:"Content"`
+	Event    string   `xml:"Event"`
+	EventKey string   `xml:"EventKey"`
 }
 
 // textReplyXML 构造明文被动回复 XML。
@@ -228,7 +230,23 @@ func (s *Server) handleWeComCallback(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "forbidden: sender not in whitelist", http.StatusForbidden)
 			return
 		}
-		reply := s.dispatchWeComCommand(strings.TrimSpace(msg.Content))
+		// 菜单点击（click 类型）推的是 event 消息，EventKey 决定执行什么，
+		// 这样点完菜单直接在聊天里出结果，不用跳 H5 页面。
+		cmd := strings.TrimSpace(msg.Content)
+		if strings.EqualFold(msg.MsgType, "event") {
+			switch strings.ToUpper(strings.TrimSpace(msg.EventKey)) {
+			case "STATUS":
+				cmd = "状态"
+			case "RETRY_FAILED":
+				cmd = "重试失败"
+			case "HELP":
+				cmd = "帮助"
+			default:
+				cmd = ""
+			}
+			logf("wecom 菜单点击 event=%s key=%s → 命令=%q", msg.Event, msg.EventKey, cmd)
+		}
+		reply := s.dispatchWeComCommand(cmd)
 		logf("wecom 回复 from=%s: %q", msg.FromUser, reply)
 		resp, err := crypt.encryptedResponse(textReplyXML(msg.FromUser, msg.ToUser, reply), ts, nonce)
 		if err != nil {
