@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -106,22 +107,24 @@ func (c *CookieCloud) endpoint() (string, error) {
 	return raw + "/" + cookieCloudAPIPath + key, nil
 }
 
-// FetchAllCookies 一次性取回全量 cookie_data，供循环前统一调用，避免重复请求。
+// FetchAll 一次性取回全量 cookie_data 与 local_storage_data，供循环前统一调用，避免重复请求。
 // 未配置 CookieCloud 时返回 nil。远端失败时按 allow-cache-fallback 回退缓存。
-func (c *CookieCloud) FetchAllCookies() (map[string][]Cookie, error) {
+func (c *CookieCloud) FetchAll() (map[string][]Cookie, map[string][]LocalStorage, error) {
 	cfg := c.Config()
 	if !cfg.Enabled() {
 		logf("CookieCloud 已禁用，跳过 Cookie 获取")
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	remote, _, remoteErr := c.fetchRemote()
 	if remoteErr == nil {
 		var data map[string][]Cookie
+		var ls map[string][]LocalStorage
 		data, remoteErr = parseCookieData(remote)
 		if remoteErr == nil {
+			ls, _ = parseLocalStorageData(remote)
 			c.writeCache(remote)
-			return data, nil
+			return data, ls, nil
 		}
 	}
 
@@ -139,17 +142,45 @@ func (c *CookieCloud) FetchAllCookies() (map[string][]Cookie, error) {
 		if parseErr != nil {
 			logf("CookieCloud 缓存内容不合法 %s: %v", cacheFile, parseErr)
 		} else if cfg.AllowCacheFallback {
+			cachedLS, _ := parseLocalStorageData(cached)
 			logf("远端获取失败，回退到旧的 CookieCloud 缓存 %s", cacheFile)
-			return cachedData, nil
+			return cachedData, cachedLS, nil
 		} else {
-			return nil, fmt.Errorf("CookieCloud 远端获取失败且 allow-cache-fallback 为 false，中止任务: %v", remoteErr)
+			return nil, nil, fmt.Errorf("CookieCloud 远端获取失败且 allow-cache-fallback 为 false，中止任务: %v", remoteErr)
 		}
 	}
 	if cfg.AllowCacheFallback {
 		logf("CookieCloud 远端获取失败且无可用本地缓存，将使用空 Cookie 继续")
-		return nil, nil
+		return nil, nil, nil
 	}
-	return nil, fmt.Errorf("CookieCloud 远端获取失败、无可用本地缓存且 allow-cache-fallback 为 false，中止任务: %v", remoteErr)
+	return nil, nil, fmt.Errorf("CookieCloud 远端获取失败、无可用本地缓存且 allow-cache-fallback 为 false，中止任务: %v", remoteErr)
+}
+
+// FetchAllCookies 仅取 Cookie，保留给不需要 localStorage 的调用方。
+func (c *CookieCloud) FetchAllCookies() (map[string][]Cookie, error) {
+	data, _, err := c.FetchAll()
+	return data, err
+}
+
+// LocalStorageFor 按目标域名从同步数据中挑选 localStorage 项。
+// 目标已手动配置 localStorage 时由调用方优先使用手动值。
+func (c *CookieCloud) LocalStorageFor(data map[string][]LocalStorage, target Target) []LocalStorage {
+	if len(data) == 0 {
+		return nil
+	}
+	domain := resolveDomain(target)
+	allowed := buildAllowedDomains(domain)
+	var matches []LocalStorage
+	for d, items := range data {
+		if !domainMatches(normalizeDomain(d), allowed) {
+			continue
+		}
+		matches = append(matches, items...)
+	}
+	if len(matches) > 0 {
+		logf("域名 [%s] 从 CookieCloud 同步到 %d 项 localStorage", domain, len(matches))
+	}
+	return matches
 }
 
 // Probe 只请求远端并统计，供 Web 面板「测试连接」使用。
@@ -350,6 +381,78 @@ func (c *CookieCloud) FilterForTarget(data map[string][]Cookie, target Target) [
 	}
 	logf("域名 [%s] 共解析到 %d 个 Cookie", domain, len(matches))
 	return matches
+}
+
+// parseLocalStorageData 解析 CookieCloud 的 local_storage_data 字段。
+// 兼容两种格式：{domain: {key: value}} 与 {domain: [{name, value}]}。
+func parseLocalStorageData(payload map[string]any) (map[string][]LocalStorage, error) {
+	raw, ok := payload["local_storage_data"]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	obj, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("local_storage_data 不是对象")
+	}
+	out := make(map[string][]LocalStorage, len(obj))
+	for domain, node := range obj {
+		items := parseLocalStorageNode(node)
+		if len(items) == 0 {
+			continue
+		}
+		out[normalizeDomain(domain)] = items
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+func parseLocalStorageNode(node any) []LocalStorage {
+	switch v := node.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		items := make([]LocalStorage, 0, len(keys))
+		for _, k := range keys {
+			items = append(items, LocalStorage{Key: k, Value: stringifyStorageValue(v[k])})
+		}
+		return items
+	case []any:
+		var items []LocalStorage
+		for _, e := range v {
+			m, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			key := firstText(m, "key", "name")
+			if key == "" {
+				continue
+			}
+			items = append(items, LocalStorage{Key: key, Value: stringifyStorageValue(m["value"])})
+		}
+		return items
+	}
+	return nil
+}
+
+// stringifyStorageValue 把任意 JSON 值转成字符串（数字/布尔按字面量，对象/数组用 JSON）。
+func stringifyStorageValue(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case nil:
+		return ""
+	default:
+		b, err := json.Marshal(t)
+		if err != nil {
+			return fmt.Sprint(t)
+		}
+		return string(b)
+	}
 }
 
 func resolveDomain(target Target) string {

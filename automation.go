@@ -36,8 +36,9 @@ type Automation struct {
 	cfg     *Config
 	store   *TargetStore
 	history *History
-	cookies *CookieCloud
-	webhook *Webhook
+	cookies      *CookieCloud
+	localStorage map[string][]LocalStorage // CookieCloud 同步的 localStorage（按域名）
+	webhook      *Webhook
 	alerts  *AlertState
 
 	running   atomic.Bool
@@ -257,7 +258,8 @@ func (a *Automation) doExecuteTargets(targets []Target, taskName string) {
 
 	// 任务开始时拉最新 CookieCloud 数据，确保用上浏览器里刚登录的站点；
 	// 若某个目标仍因 Cookie 失效失败，循环内会再刷新一次并重试该目标。
-	cookieData, err := a.cookies.FetchAllCookies()
+	cookieData, lsData, err := a.cookies.FetchAll()
+	a.localStorage = lsData
 	if err != nil {
 		a.setTaskError(err)
 		logf("%s的 CookieCloud 获取失败且不允许回退缓存，中止任务: %v", taskName, err)
@@ -316,7 +318,8 @@ func (a *Automation) doExecuteTargets(targets []Target, taskName string) {
 func (a *Automation) doExecuteTarget(target Target) {
 	logf("开始单独重试目标 [%s] %s", target.DisplayName(), target.URL)
 
-	cookieData, err := a.cookies.FetchAllCookies()
+	cookieData, lsData, err := a.cookies.FetchAll()
+	a.localStorage = lsData
 	if err != nil {
 		logf("单独重试目标 [%s] 时 CookieCloud 获取失败: %v", target.DisplayName(), err)
 		a.history.Record(target.URL, false, "CookieCloud 获取失败，任务已中止")
@@ -345,6 +348,10 @@ func (a *Automation) doExecuteTarget(target Target) {
 
 // visitTarget 返回 false 表示浏览器已关闭，应中断本轮剩余目标。
 func (a *Automation) visitTarget(browser *Browser, target Target, cookieData map[string][]Cookie) bool {
+	// 目标未手动配置 localStorage 时，使用 CookieCloud 同步的数据补齐。
+	if len(target.LocalStorage) == 0 {
+		target.LocalStorage = a.cookies.LocalStorageFor(a.localStorage, target)
+	}
 	logf("开始打开目标 [%s] %s", target.DisplayName(), target.URL)
 
 	cookies := a.cookies.FilterForTarget(cookieData, target)

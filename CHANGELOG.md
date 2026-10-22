@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.1 (2026-10-22)
+
+### 新增：CookieCloud 同步 localStorage
+- 解析 CookieCloud 的 `local_storage_data` 字段，按目标域名自动注入 localStorage
+  （如 Rousi Pro 的 `token` 这类只存在 localStorage 里的凭据）
+- **优先级**：目标手动配置的 `localStorage` 优先；为空时才使用同步值，不覆盖人工设置
+- 兼容两种数据格式：`{domain: {key: value}}` 与 `{domain: [{name, value}]}`
+- 新增 `FetchAll()`（一次返回 Cookie + localStorage），`FetchAllCookies()` 保留兼容
+- 新增 `LocalStorageFor()`：按域名匹配（支持子域、`www.` 前缀），复用现有 Cookie 域名逻辑
+
+### 说明
+- 需要 CookieCloud 浏览器扩展开启「同步 LocalStorage」才会导出该字段
+- 未开启时 `local_storage_data` 为空，行为与 1.0.0 完全一致（不注入，不影响现有站点）
+
+### 测试
+- 新增 `TestParseLocalStorageData`、`TestParseLocalStorageDataMissing`、`TestLocalStorageForMatchesDomain`
+
 ## 1.0.0 (2026-10-22)
 
 首个语义化版本（1.0.0）。此前为无版本号的滚动更新。
