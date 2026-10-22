@@ -107,6 +107,11 @@ type WeComConfig struct {
 	ToUser     string `yaml:"touser"`
 	// 企业微信 API 代理，默认 https://qyapi.weixin.qq.com
 	Proxy string `yaml:"proxy"`
+	// 接收消息回调（企业微信应用后台「接收消息」生成的）
+	CallbackEnabled bool   `yaml:"callback-enabled"`
+	CallbackToken   string `yaml:"callback-token"`
+	CallbackAESKey  string `yaml:"callback-aeskey"`
+	CallbackOwner   string `yaml:"callback-owner"`
 }
 
 type StartupNotificationConfig struct {

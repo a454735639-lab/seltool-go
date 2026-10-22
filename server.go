@@ -116,6 +116,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/settings/notify", s.requireAuth(s.handleGetNotify))
 	mux.HandleFunc("PUT /api/settings/notify", s.requireAuth(s.requireCSRF(s.handleSaveNotify)))
 	mux.HandleFunc("POST /api/settings/notify/test", s.requireAuth(s.requireCSRF(s.handleTestNotify)))
+	// 企业微信「接收消息」回调（企微服务器调用，公开、按白名单鉴权）
+	mux.HandleFunc("GET /wecom/callback", s.handleWeComCallback)
+	mux.HandleFunc("POST /wecom/callback", s.handleWeComCallback)
 	mux.HandleFunc("GET /api/settings/schedule", s.requireAuth(s.handleGetSchedule))
 	mux.HandleFunc("PUT /api/settings/schedule", s.requireAuth(s.requireCSRF(s.handleSaveSchedule)))
 	mux.HandleFunc("GET /api/settings/schedule/presets", s.requireAuth(s.handleSchedulePresets))

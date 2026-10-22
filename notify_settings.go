@@ -20,6 +20,11 @@ type NotifySettings struct {
 	Proxy      string `json:"proxy"`
 	// OnlyOnFailure 勾选后，全部成功的任务不再推送。
 	OnlyOnFailure bool `json:"onlyOnFailure"`
+	// 企业微信「接收消息」回调（交互式命令）。
+	CallbackEnabled bool   `json:"callbackEnabled"`
+	CallbackToken   string `json:"callbackToken"`
+	CallbackAESKey  string `json:"callbackAesKey"`
+	CallbackOwner   string `json:"callbackOwner"`
 }
 
 func (s NotifySettings) toConfig() WeComConfig {
@@ -32,6 +37,10 @@ func (s NotifySettings) toConfig() WeComConfig {
 		AgentID:    s.AgentID,
 		ToUser:     strings.TrimSpace(s.ToUser),
 		Proxy:      strings.TrimSpace(s.Proxy),
+		CallbackEnabled: s.CallbackEnabled,
+		CallbackToken:   strings.TrimSpace(s.CallbackToken),
+		CallbackAESKey:  strings.TrimSpace(s.CallbackAESKey),
+		CallbackOwner:   strings.TrimSpace(s.CallbackOwner),
 	}
 }
 
@@ -87,6 +96,12 @@ func (s *NotifyStore) Save(in NotifySettings) (NotifySettings, error) {
 	if in.CorpSecret == "" {
 		in.CorpSecret = s.cur.CorpSecret
 	}
+	in.CallbackToken = strings.TrimSpace(in.CallbackToken)
+	in.CallbackAESKey = strings.TrimSpace(in.CallbackAESKey)
+	if in.CallbackAESKey == "" {
+		in.CallbackAESKey = s.cur.CallbackAESKey
+	}
+	in.CallbackOwner = strings.TrimSpace(in.CallbackOwner)
 	if in.MsgType == "" {
 		in.MsgType = "markdown"
 	}
@@ -110,6 +125,10 @@ func (s NotifySettings) mask() map[string]any {
 		"proxy":         s.Proxy,
 		"onlyOnFailure": s.OnlyOnFailure,
 		"hasCorpSecret": strings.TrimSpace(s.CorpSecret) != "",
+		"callbackEnabled":   s.CallbackEnabled,
+		"callbackToken":     s.CallbackToken,
+		"callbackOwner":     s.CallbackOwner,
+		"hasCallbackAESKey": strings.TrimSpace(s.CallbackAESKey) != "",
 		"enabled":       NewWeCom(s.toConfig()).Enabled(),
 	}
 }
