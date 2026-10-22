@@ -116,13 +116,15 @@ function retryOne(i) {
   showMsg('已提交重试「' + t.name + '」，稍后自动刷新…');
   api('/api/pt-panel/retry?url=' + encodeURIComponent(t.url), 'POST').then(() => setTimeout(load, 2000)).catch(e => showMsg(e.message, 'err'));
 }
-$('b-all').onclick = () => {
+function retryAll() {
   showMsg('已提交：重试所有失败目标…');
   api('/api/pt-panel/retry-failed', 'POST').then(() => setTimeout(load, 2500)).catch(e => showMsg(e.message, 'err'));
-};
+}
+$('b-all').onclick = retryAll;
 $('b-refresh').onclick = () => load();
 function esc(s) { return String(s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
-load();
+const __act = new URLSearchParams(location.search).get('action');
+load().then(() => { if (__act === 'retryall') retryAll(); });
 setInterval(load, 60000);
 </script>
 </body>
