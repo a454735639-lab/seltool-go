@@ -297,7 +297,7 @@ func (w *WeCom) CreateQuickMenu(statusURL, retryURL string) error {
 			},
 		},
 	}
-	if err := w.postJSON(apiBase+"/cgi-bin/menu/create?access_token="+url.QueryEscape(token), menu); err != nil {
+	if err := w.postJSON(apiBase+"/cgi-bin/menu/create?access_token="+url.QueryEscape(token)+"&agentid="+fmt.Sprintf("%d", w.cfg.AgentID), menu); err != nil {
 		return err
 	}
 	logf("已创建企微「PT 保活」快捷菜单 → %s", statusURL)
