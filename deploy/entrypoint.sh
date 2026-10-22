@@ -3,7 +3,15 @@ set -euo pipefail
 
 VNC_PORT="${VNC_PORT:-5900}"
 NOVNC_PORT="${NOVNC_PORT:-7900}"
-: "${SE_VNC_PASSWORD:=selenium}"
+
+# 不再用默认口令 selenium：没配置就随机生成一个，只在启动日志里打印一次。
+# 默认口令 + 端口暴露 = 任何人都能远程看/操作浏览器里的已登录会话。
+VNC_PASSWORD_GENERATED=0
+if [ -z "${SE_VNC_PASSWORD:-}" ]; then
+  SE_VNC_PASSWORD="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16)"
+  VNC_PASSWORD_GENERATED=1
+fi
+export SE_VNC_PASSWORD
 
 export DISPLAY=:99
 
@@ -79,4 +87,8 @@ if ! wait_for "vncproxy :$NOVNC_PORT" 15 \
 fi
 
 log "Xvfb :99 / VNC :$VNC_PORT / noVNC :$NOVNC_PORT 已启动"
+if [ "$VNC_PASSWORD_GENERATED" = "1" ]; then
+  log "未设置 SE_VNC_PASSWORD，本次随机生成：$SE_VNC_PASSWORD"
+  log "（重启会换新口令；想固定就在 .env 里设置 SE_VNC_PASSWORD）"
+fi
 exec /app/seltool -config /app/config/custom.yml

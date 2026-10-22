@@ -234,7 +234,7 @@ func TestEndpointForms(t *testing.T) {
 		"https://movie-pilot.org/":             "https://movie-pilot.org/cookiecloud/get/k1",
 		"https://movie-pilot.org/cookiecloud":  "https://movie-pilot.org/cookiecloud/get/k1",
 		"https://movie-pilot.org/cookiecloud/": "https://movie-pilot.org/cookiecloud/get/k1",
-		"http://10.0.0.4:18088/apps":       "http://10.0.0.4:18088/apps/cookiecloud/get/k1",
+		"http://10.0.0.4:18088/apps":           "http://10.0.0.4:18088/apps/cookiecloud/get/k1",
 	}
 	for in, want := range cases {
 		cc := NewCookieCloud(CookieCloudConfig{URL: in, Key: "k1"}, NewAlertState())

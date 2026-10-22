@@ -70,22 +70,67 @@ button.primary{background:var(--acc);border-color:var(--acc);color:#fff;font-wei
 </div>
 
 <script>
-const KEY = new URLSearchParams(location.search).get('k') || '';
-const qs = () => 'key=' + encodeURIComponent(KEY);
 const $ = id => document.getElementById(id);
+// 地址栏里的一次性密钥（企微菜单链接带的），换取短期令牌后立刻抹掉。
+const KEY = new URLSearchParams(location.search).get('k') || '';
+const TOKEN_KEY = 'pt_panel_token';
+let TOKEN = sessionStorage.getItem(TOKEN_KEY) || '';
+
+function stripKeyFromURL() {
+  const u = new URL(location.href);
+  if (!u.searchParams.has('k')) return;
+  u.searchParams.delete('k');
+  history.replaceState(null, '', u.pathname + (u.search || ''));
+}
+
+async function exchangeKey() {
+  if (!KEY) return false;
+  try {
+    const r = await fetch('/api/pt-panel/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: KEY })
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.token) return false;
+    TOKEN = d.token;
+    sessionStorage.setItem(TOKEN_KEY, TOKEN);
+    stripKeyFromURL();
+    return true;
+  } catch (e) { return false; }
+}
 
 function showMsg(t, cls) { const m = $('msg'); m.textContent = t; m.className = 'msg ' + (cls || ''); }
 async function api(path, method, body) {
-  let url = path + (path.includes('?') ? '&' : '?') + qs();
-  const opt = { method, headers: {} };
+  const opt = { method, headers: { 'X-Panel-Token': TOKEN } };
   if (body) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
-  const r = await fetch(url, opt);
+  const r = await fetch(path, opt);
   let d; try { d = await r.json(); } catch (e) { d = {}; }
+  if (r.status === 403 || r.status === 401) {
+    // 令牌过期（2 小时）：清掉，提示重新从企微菜单打开
+    TOKEN = '';
+    sessionStorage.removeItem(TOKEN_KEY);
+    $('wrap').style.display = 'none';
+    $('nokey').style.display = 'block';
+    throw Error(d.error || '访问已过期，请从企业微信重新打开');
+  }
   if (!r.ok) throw Error(d.error || ('HTTP ' + r.status));
   return d;
 }
 async function load() {
-  if (!KEY) { $('nokey').style.display = 'block'; return; }
+  if (KEY) {
+    // 带密钥打开：每次都换一个新令牌，并把 k 从地址栏抹掉
+    if (!(await exchangeKey())) {
+      $('nokey').style.display = 'block';
+      $('wrap').style.display = 'none';
+      return;
+    }
+  }
+  if (!TOKEN) {
+    $('nokey').style.display = 'block';
+    $('wrap').style.display = 'none';
+    return;
+  }
   $('nokey').style.display = 'none'; $('wrap').style.display = 'block';
   try {
     const d = await api('/api/pt-panel/summary', 'GET');

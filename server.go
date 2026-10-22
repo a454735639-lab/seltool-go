@@ -43,6 +43,9 @@ type Server struct {
 	autoImport *AutoImportStore
 	// loginLimit 登录失败限速（IP + 用户名双维度）。
 	loginLimit *loginLimiter
+	// panelTokens 快捷页短期令牌；panelLimit 限制明文密钥的尝试次数。
+	panelTokens *panelTokenStore
+	panelLimit  *loginLimiter
 }
 
 func NewServer(cfg *Config, accounts *AccountStore, sessions *SessionStore, targets *TargetStore,
@@ -56,6 +59,7 @@ func NewServer(cfg *Config, accounts *AccountStore, sessions *SessionStore, targ
 		settings: settings, cookies: cookies, notify: notify, webhook: webhook,
 		schedule: schedule, scheduler: scheduler, ptSites: ptSites, ptIcons: ptIcons, mpSync: mpSync,
 		autoImport: autoImport, loginLimit: newLoginLimiter(),
+		panelTokens: newPanelTokenStore(), panelLimit: newLoginLimiter(),
 	}
 }
 
@@ -84,6 +88,12 @@ func (s *Server) Handler() http.Handler {
 	}
 	mux.HandleFunc("GET /{$}", indexHandler)
 	mux.HandleFunc("GET /index.html", indexHandler)
+
+	// 容器健康检查用：不涉及任何数据，也不需要登录。
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true}`))
+	})
 
 	// 浏览器会无条件请求 favicon，给个空响应避免 404 噪音
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
@@ -123,6 +133,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /wecom/callback", s.handleWeComCallback)
 	// 企业微信工作台 H5 快捷指令页（页面公开，数据靠 ?key= 鉴权）
 	mux.HandleFunc("GET /pt-panel", func(w http.ResponseWriter, r *http.Request) { serveEmbedded(w, r, static, "pt-panel.html") })
+	mux.HandleFunc("POST /api/pt-panel/token", s.handlePanelToken)
 	mux.HandleFunc("GET /api/pt-panel/summary", s.handlePanelSummary)
 	mux.HandleFunc("POST /api/pt-panel/retry-failed", s.handlePanelRetryFailed)
 	mux.HandleFunc("POST /api/pt-panel/retry", s.handlePanelRetry)

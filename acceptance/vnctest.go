@@ -169,13 +169,13 @@ func (w *WS) ReadMessage() ([]byte, error) {
 // ---------------- RFB ----------------
 
 type RFB struct {
-	ws   *WS
-	buf  []byte
-	W, H int
-	Bpp  int
+	ws               *WS
+	buf              []byte
+	W, H             int
+	Bpp              int
 	Rmax, Gmax, Bmax uint16
-	Rsh, Gsh, Bsh     uint8
-	Name string
+	Rsh, Gsh, Bsh    uint8
+	Name             string
 }
 
 func (r *RFB) fill(n int, timeout time.Duration) error {
@@ -503,8 +503,8 @@ func main() {
 		body, _ := io.ReadAll(io.LimitReader(r.Body, 4096))
 		r.Body.Close()
 		emit("http", map[string]any{
-			"status": r.StatusCode,
-			"bytes":  len(body),
+			"status":    r.StatusCode,
+			"bytes":     len(body),
 			"has_novnc": contains(string(body), "noVNC") || contains(string(body), "vnc"),
 		})
 	}()
@@ -587,9 +587,9 @@ func main() {
 	} else {
 		writePPM(*out+"/fb2.ppm", fb2, r.W, r.H, r.Rsh, r.Gsh, r.Bsh)
 		emit("mouse", map[string]any{
-			"action": "right click (button3) at (60,H-60) -> fluxbox root menu",
+			"action":             "right click (button3) at (60,H-60) -> fluxbox root menu",
 			"diff_pixels_vs_fb1": diffPixels(fb1, fb2),
-			"stats": stats(fb2),
+			"stats":              stats(fb2),
 		})
 	}
 	// 关闭菜单
@@ -649,12 +649,12 @@ func main() {
 				fb5, rects5, err5 := r2.capture(true)
 				emit("reconnect", map[string]any{
 					"ok": true, "width": r2.W, "height": r2.H,
-					"stats": stats(fb4),
-					"diff_vs_fb3": diffPixels(fb3, fb4),
+					"stats":                 stats(fb4),
+					"diff_vs_fb3":           diffPixels(fb3, fb4),
 					"input_after_reconnect": "click(300,300)+key z",
 					"incremental": map[string]any{
 						"rects": len(rects5), "err": errOf(err5),
-						"rect_list": rects5,
+						"rect_list":   rects5,
 						"diff_vs_fb4": diffPixels(fb4, fb5),
 					},
 				})

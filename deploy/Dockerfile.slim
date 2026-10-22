@@ -4,8 +4,7 @@ FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive \
     DISPLAY=:99 \
     TZ=Asia/Shanghai \
-    SELTOOL_CHROME_BIN=/usr/bin/chromium \
-    SE_VNC_PASSWORD=selenium
+    SELTOOL_CHROME_BIN=/usr/bin/chromium
 
 # 只要 Chromium、X 服务和一款中文字体；不装 novnc/websockify（会拖进 nodejs + python3）
 RUN apt-get update && apt-get install -y --no-install-recommends \

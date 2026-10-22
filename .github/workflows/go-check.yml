@@ -1,0 +1,41 @@
+name: go-check
+
+# 轻量检查：任何分支/PR 都跑，不构建镜像、不推送任何东西。
+# 用途是「提交后 3 分钟内知道代码能不能编译、测试过不过」，
+# 而不是等 15 分钟的多架构构建才发现 vet 报错。
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vet-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt 检查
+        run: |
+          files="$(git ls-files '*.go' | grep -v '^vendor/' || true)"
+          bad="$(gofmt -l $files || true)"
+          if [ -n "$bad" ]; then
+            echo "以下文件未格式化，请执行 gofmt -w："
+            echo "$bad"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -count=1 ./...

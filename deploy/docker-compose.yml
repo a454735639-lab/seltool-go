@@ -3,10 +3,13 @@ services:
   seltool:
     # 容器级参数在同目录 .env；面板设置（CookieCloud / 通知 / MoviePilot /
     # 定时任务）存在 config/*.json 里，由 Web 面板管理，不用写在这里。
-    # 默认用 ghcr 上的最新版；要锁版本就在 .env 里写 IMAGE=...:sha-xxxxxxx
-    image: ${IMAGE:-ghcr.io/a454735639-lab/seltool-go:latest}
+    # 默认用 Docker Hub 上的最新版（多架构，国内拉取也稳）；要锁版本就在
+    # .env 里写 IMAGE=asice99/seltool-go:1.0.4
+    image: ${IMAGE:-asice99/seltool-go:latest}
     container_name: seltool-go
     restart: unless-stopped
+    # 停机时留出时间让 Chromium / 浏览器任务体面退出
+    stop_grace_period: 30s
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       SE_VNC_PASSWORD: ${SE_VNC_PASSWORD:?请在 .env 里设置 SE_VNC_PASSWORD}
@@ -22,3 +25,22 @@ services:
     ports:
       - "${HOST_HTTP_PORT:-8081}:8080"
       - "127.0.0.1:${HOST_VNC_PORT:-7900}:7900"
+    # Chromium 的默认 /dev/shm 只有 64MB，多标签页时会直接崩（表现为
+    # "Target closed" / 页面白屏）。给它一块真实内存盘。
+    shm_size: "1gb"
+    # 健康检查打的是 /healthz（无鉴权、不读数据），比只看进程存活准：
+    # 主 goroutine 卡死时进程还在，但接口已经不应答了。
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--max-time", "3", "http://127.0.0.1:8080/healthz"]
+      interval: 60s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    # 容器内的 Chromium 与抓取进程都不需要提权
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

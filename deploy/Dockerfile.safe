@@ -25,7 +25,8 @@ COPY --from=runtime / /
 COPY --from=build /out/seltool /app/seltool
 COPY --from=build /out/vncproxy /app/vncproxy
 COPY deploy/entrypoint.sh /app/entrypoint.sh
-ENV DISPLAY=:99 TZ=Asia/Shanghai SELTOOL_CHROME_BIN=/usr/bin/chromium SE_VNC_PASSWORD=selenium
+# 不设默认 VNC 口令：entrypoint 会在未配置时随机生成并打印到日志
+ENV DISPLAY=:99 TZ=Asia/Shanghai SELTOOL_CHROME_BIN=/usr/bin/chromium
 WORKDIR /app
 EXPOSE 8080 7900
 ENTRYPOINT ["/usr/bin/tini","--","/app/entrypoint.sh"]

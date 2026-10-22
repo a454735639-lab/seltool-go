@@ -1,5 +1,49 @@
 # Changelog
 
+## 1.0.4 (2026-10-23)
+
+交付质量批：让「构建出来的东西」和「声称的东西」一致，并把快捷页的密钥从 URL 里挪走。
+
+### 交付 / CI
+
+- **默认镜像名修正**：`deploy/docker-compose.yml` 原来默认 `ghcr.io/a454735639-lab/seltool-go`，
+  而 CI 实际推的是 `seltoolgo`（无连字符）—— 那个包是删库留下的孤儿，跟着模板走的人会拉到
+  一个永不更新的旧镜像。现在默认 `asice99/seltool-go:latest`。
+- **CI 改成「先验证后推送」**：以前是构建 → 直接推 Docker Hub/GHCR → 再冒烟，冒烟挂了
+  坏镜像已经出去了。现在顺序是 `gofmt/vet/test` → 构建 amd64 本地镜像 → 冒烟（含
+  `/healthz`、`/login.html`、`?k=` 必须被拒、noVNC 端口）→ 全过了才登录并推送多架构。
+- **`VERSION` 读取失败直接报错**：原来是 `cat VERSION || echo 0.0.0`，文件丢了会静默产出
+  `0.0.0` 镜像和 `build-...` 标签，事后极难追溯。现在缺失或不是 `x.y.z` 就 fail。
+- **Release tag 改成 `v$VERSION`**（原来 `build-YYYYMMDD-sha`），版本号能直接从 tag 看出来。
+- **新增 `go-check` 工作流**：任意分支/PR 都跑 `gofmt -l`（非 vendor）+ `go vet` + `go test`，
+  不用等镜像构建就能知道代码有没有问题。
+- **`.dockerignore` 排除 `.env`**：Dockerfile 有 `COPY . .`，之前 `.env`（含
+  `SE_VNC_PASSWORD`）会被打进构建层，`docker history` / 解包镜像都能扒出来。
+- **compose 补齐运维参数**：`logging` 轮转（20m × 5，此前 json-file 无限增长）、
+  `shm_size: 1gb`（Chromium 默认 64MB `/dev/shm`，多标签页必崩）、`healthcheck` 打
+  `/healthz`、`security_opt: no-new-privileges`、`stop_grace_period: 30s`。
+  **没加 `cap_drop: ALL`**：容器以 root 跑 Chromium 且带 `--no-sandbox`，丢光能力会影响
+  文件属主改写，需要单独验证后再上。
+
+### 安全
+
+- **noVNC 默认口令 `selenium` 移除**（`entrypoint.sh`、`Dockerfile.slim`、`Dockerfile.safe`）：
+  未配置 `SE_VNC_PASSWORD` 时随机生成 16 位并在启动日志打印一次。默认口令 + 端口暴露
+  = 任何人都能接管浏览器里的已登录会话。
+- **快捷页密钥不再随每次请求出现**：`?k=<面板密钥>` 以前直接拼在每个数据接口上，
+  会进反代 access_log、浏览器历史、企微菜单截图。现在：
+  1. 页面带 `?k=` 打开，只用来 `POST /api/pt-panel/token` 换一枚 **2 小时**令牌；
+  2. 换完立刻 `history.replaceState` 把 `k` 从地址栏抹掉；
+  3. 之后所有 `/api/pt-panel/*` 只认 `X-Panel-Token` 请求头，`?k=` 一律 403。
+  老菜单链接照常可用（页面自己完成兑换）。
+- **密钥兑换接口带失败限速**：5 次/10 分钟锁 15 分钟，避免拿 18 位密钥去撞库。
+- **设置页新增「随机生成」**：一键填 32 位随机密钥（`crypto.getRandomValues`），
+  并显示为明文方便复制；重新生成后点「一键创建企微菜单」即可换掉旧链接。
+
+### 新增接口
+
+- `GET /healthz` → `{"ok":true}`，无鉴权、不读数据，供容器健康检查使用。
+
 ## 1.0.3 (2026-10-23)
 
 本轮来自一次全量安全 + 健壮性审计（报告见 `shared/seltool-go-audit/`），修的是

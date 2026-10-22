@@ -1,5 +1,10 @@
 .git
 .gitea
+# 容器环境变量文件里有 SE_VNC_PASSWORD / 各种 token；COPY . . 会把它
+# 一起塞进构建层，任何拿到镜像的人都能 docker history 扒出来
+.env
+.env.*
+!.env.example
 /config
 /data
 /acceptance
