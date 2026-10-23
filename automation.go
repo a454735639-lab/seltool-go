@@ -43,7 +43,9 @@ type Automation struct {
 
 	running atomic.Bool
 	runMu   sync.Mutex // 串行化浏览器实例的创建与销毁
-	browser *Browser
+	// browsers 按代理模式缓存浏览器：proxy=走全局代理，direct=目标直连（不带代理）。
+	// 两种模式各用一个独立的 profile 目录，避免 Chromium 的 profile 单实例锁互相阻塞。
+	browsers map[string]*Browser
 
 	// errMu 只保护 lastError。此前它复用 runMu，导致浏览器启动期间（可能长达
 	// 数十秒）面板查询任务状态全部阻塞，Shutdown 也无法及时进入。
@@ -234,7 +236,7 @@ func isTransientFailure(cat string) bool {
 }
 
 // retryTransientFailures 在整批跑完后，对瞬时失败的目标各重试一次。
-func (a *Automation) retryTransientFailures(browser *Browser, targets []Target, cookieData map[string][]Cookie) {
+func (a *Automation) retryTransientFailures(targets []Target, cookieData map[string][]Cookie) {
 	var retry []Target
 	for _, t := range targets {
 		rec, ok := a.lastFailure(t.URL)
@@ -278,6 +280,12 @@ func (a *Automation) retryTransientFailures(browser *Browser, targets []Target, 
 
 	for i, t := range retry {
 		logf("自动重试 %d/%d：%s", i+1, len(retry), t.DisplayName())
+		browser, err := a.browserFor(t.NoProxy)
+		if err != nil {
+			logf("自动重试 [%s] 启动浏览器失败: %v", t.DisplayName(), err)
+			a.history.Record(t.URL, false, buildFailureMessage(err))
+			continue
+		}
 		if !a.visitTarget(browser, t, cookieData) {
 			logf("浏览器已关闭，停止自动重试")
 			return
@@ -310,20 +318,18 @@ func (a *Automation) doExecuteTargets(targets []Target, taskName string) {
 		return
 	}
 
-	browser, err := a.getOrCreateBrowser()
-	if err != nil {
-		a.setTaskError(err)
-		logf("%s启动浏览器失败: %v", taskName, err)
-		for _, t := range targets {
-			a.history.Record(t.URL, false, buildFailureMessage(err))
-		}
-		return
-	}
-
 	interrupted := false
 	refreshed := false // 同一轮任务内最多刷新一次，避免反复请求远端
 	for i, t := range targets {
 		logf("开始处理第%d个目标 %s", i+1, t.DisplayName())
+		// 每个目标按自己的代理模式取浏览器：直连目标不挂全局代理。
+		browser, err := a.browserFor(t.NoProxy)
+		if err != nil {
+			a.setTaskError(err)
+			logf("%s启动浏览器失败: %v", taskName, err)
+			a.history.Record(t.URL, false, buildFailureMessage(err))
+			continue
+		}
 		if !a.visitTarget(browser, t, cookieData) {
 			interrupted = true
 			break
@@ -347,7 +353,7 @@ func (a *Automation) doExecuteTargets(targets []Target, taskName string) {
 	if !interrupted {
 		// 批次里偶尔会碰到站点瞬时 5xx / 超时：同一个站过一两分钟单独访问又好了。
 		// 这里统一再试一次，避免「批量失败、单跑成功」的困惑。
-		a.retryTransientFailures(browser, targets, cookieData)
+		a.retryTransientFailures(targets, cookieData)
 		a.closeBrowser()
 		closed = true
 	}
@@ -368,7 +374,7 @@ func (a *Automation) doExecuteTarget(target Target) {
 		return
 	}
 
-	browser, err := a.getOrCreateBrowser()
+	browser, err := a.browserFor(target.NoProxy)
 	if err != nil {
 		logf("单独重试目标 [%s] 启动浏览器失败: %v", target.DisplayName(), err)
 		a.history.Record(target.URL, false, buildFailureMessage(err))
@@ -413,40 +419,65 @@ func (a *Automation) visitTarget(browser *Browser, target Target, cookieData map
 	return true
 }
 
-func (a *Automation) getOrCreateBrowser() (*Browser, error) {
+// browserMode 返回目标使用的浏览器模式键。
+func browserMode(noProxy bool) string {
+	if noProxy {
+		return "direct"
+	}
+	return "proxy"
+}
+
+// browserFor 返回（必要时创建）指定模式下的浏览器实例。
+// noProxy 为 true 时不注入全局代理，并使用独立的 profile 目录。
+func (a *Automation) browserFor(noProxy bool) (*Browser, error) {
+	mode := browserMode(noProxy)
+
 	a.runMu.Lock()
 	defer a.runMu.Unlock()
 
-	if a.browser != nil && a.browser.Alive() {
-		return a.browser, nil
+	if a.browsers == nil {
+		a.browsers = make(map[string]*Browser, 2)
 	}
-	if a.browser != nil {
-		a.browser.Close()
-		a.browser = nil
+	if b := a.browsers[mode]; b != nil && b.Alive() {
+		return b, nil
 	}
-	b, err := NewBrowser(a.cfg.Automation.Browser)
+	if b := a.browsers[mode]; b != nil {
+		b.Close()
+		delete(a.browsers, mode)
+	}
+
+	cfg := a.cfg.Automation.Browser
+	if noProxy {
+		cfg.Proxy = ""
+		if dir := strings.TrimSpace(cfg.UserDataDir); dir != "" {
+			cfg.UserDataDir = dir + "-direct"
+		}
+		logf("目标直连模式：本次浏览器不使用代理（profile=%s）", cfg.UserDataDir)
+	}
+
+	b, err := NewBrowser(cfg)
 	if err != nil {
 		return nil, err
 	}
-	logf("已创建新的浏览器会话")
-	a.browser = b
+	logf("已创建新的浏览器会话（模式：%s）", mode)
+	a.browsers[mode] = b
 	return b, nil
 }
 
 func (a *Automation) closeBrowser() {
 	a.runMu.Lock()
 	defer a.runMu.Unlock()
-	if a.browser != nil {
-		a.browser.Close()
-		a.browser = nil
+	for mode, b := range a.browsers {
+		b.Close()
+		delete(a.browsers, mode)
 	}
 }
 
 func (a *Automation) handleBrowserClosed(target Target, err error) {
 	a.runMu.Lock()
-	if a.browser != nil {
-		a.browser.Close()
-		a.browser = nil
+	for mode, b := range a.browsers {
+		b.Close()
+		delete(a.browsers, mode)
 	}
 	a.runMu.Unlock()
 

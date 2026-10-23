@@ -132,6 +132,8 @@ type Target struct {
 	OKSelector   string `yaml:"okSelector" json:"okSelector,omitempty"`
 	FailSelector string `yaml:"failSelector" json:"failSelector,omitempty"`
 	LoginPath    string `yaml:"loginPath" json:"loginPath,omitempty"`
+	// NoProxy 为 true 时该目标使用直连（不注入全局代理），用于被代理出口 IP 拦截的站点。
+	NoProxy bool `yaml:"noProxy" json:"noProxy,omitempty"`
 }
 
 type LocalStorage struct {
