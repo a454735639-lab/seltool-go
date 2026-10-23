@@ -508,6 +508,20 @@ func (s *Server) weComSyncCookies() string {
 	}
 	syncCookiesOK(data)
 
+	// 与面板「同步」和每日同步保持一致：自动导入开着就把新站补进目标列表，
+	// 否则用户在微信里发「同步 cookie」永远看不到新站进来。
+	var added []string
+	if s.autoImport != nil && s.autoImport.Current().Enabled && s.targets != nil {
+		if res, e := RunAutoImport(data, lsData, s.targets); e != nil {
+			logf("微信指令自动导入失败: %v", e)
+		} else {
+			added = res.Added
+			if len(added) > 0 {
+				logf("微信指令自动导入 %d 个新站点: %s", len(added), res.Summary())
+			}
+		}
+	}
+
 	total := 0
 	have := map[string]bool{}
 	for domain, list := range data {
@@ -548,6 +562,9 @@ func (s *Server) weComSyncCookies() string {
 	fmt.Fprintf(&b, "目标 %d 个，有凭据 %d 个", len(targets), len(targets)-len(missing))
 	if len(missing) > 0 {
 		fmt.Fprintf(&b, "\n缺凭据 %d 个：%s", len(missing), strings.Join(missing, "、"))
+	}
+	if len(added) > 0 {
+		fmt.Fprintf(&b, "\n自动新增 %d 个目标：%s", len(added), strings.Join(added, "、"))
 	}
 	return b.String()
 }
