@@ -100,6 +100,9 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
+	// 版本信息（公开，仅返回版本号字符串）
+	mux.HandleFunc("GET /api/version", s.handleVersion)
+
 	// 认证
 	mux.HandleFunc("GET /api/auth/status", s.handleAuthStatus)
 	mux.HandleFunc("POST /api/auth/register", s.handleRegister)

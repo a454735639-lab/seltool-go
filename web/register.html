@@ -6,6 +6,7 @@
     <div class="brand"><div class="brand-icon">⌁</div><div><div class="brand-name">selenium-tool</div><div class="brand-subtitle">首次使用初始化</div></div></div>
     <div id="loading" class="loading">正在检查账户状态…</div>
     <section id="content" hidden><h1>创建管理员</h1><p class="intro">当前尚未创建用户。注册完成后，注册入口将自动关闭。</p><form id="register-form"><label for="username">用户名</label><input id="username" name="username" minlength="3" maxlength="64" pattern="[A-Za-z0-9_.@-]+" autocomplete="username" required autofocus><label for="password">密码</label><input id="password" name="password" type="password" minlength="8" maxlength="128" autocomplete="new-password" required><label for="confirm-password">确认密码</label><input id="confirm-password" name="confirmPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" required><button id="submit" type="submit">注册管理员</button><div id="message" class="message"></div></form></section>
+  <div id="appVersion" class="auth-version" title="当前镜像版本"></div>
   </main>
   <script>
     let authStatus;
@@ -15,4 +16,5 @@
     form.addEventListener('submit',async event=>{event.preventDefault();if(form.password.value!==form.confirmPassword.value){showMessage('两次输入的密码不一致');return}submit.disabled=true;try{const response=await fetch('/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json',[authStatus.csrfHeaderName]:authStatus.csrfToken},body:JSON.stringify({username:form.username.value.trim(),password:form.password.value})}),data=await response.json();if(!response.ok)throw Error(data.error||'注册失败');showMessage('注册成功，正在前往登录页面…','success');setTimeout(()=>location.replace('/login.html'),700)}catch(e){showMessage(e.message)}finally{submit.disabled=false}});
     init();
   </script>
+<script>fetch('/api/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{const e=document.getElementById('appVersion');if(e&&d&&d.version)e.textContent='v'+d.version}).catch(()=>{});</script>
 </body></html>
