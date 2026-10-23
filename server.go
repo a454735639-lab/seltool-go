@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -41,8 +42,12 @@ type Server struct {
 	ptIcons    *PTIconTable
 	mpSync     *MoviePilotSyncStore
 	autoImport *AutoImportStore
-	// loginLimit 登录失败限速（IP + 用户名双维度）。
+	// loginLimit 登录失败限速（IP 硬锁 + 用户名递增延迟）。
 	loginLimit *loginLimiter
+	// wecomReplay 企微回调防重放（时间戳窗口 + MsgId 去重）。
+	wecomReplay *replayGuard
+	// setup 首次注册的一次性令牌，防止公网抢注管理员。
+	setup *setupGuard
 }
 
 func NewServer(cfg *Config, accounts *AccountStore, sessions *SessionStore, targets *TargetStore,
@@ -55,7 +60,8 @@ func NewServer(cfg *Config, accounts *AccountStore, sessions *SessionStore, targ
 		history: history, templates: templates, automation: automation, alerts: alerts,
 		settings: settings, cookies: cookies, notify: notify, webhook: webhook,
 		schedule: schedule, scheduler: scheduler, ptSites: ptSites, ptIcons: ptIcons, mpSync: mpSync,
-		autoImport: autoImport, loginLimit: newLoginLimiter(),
+		autoImport: autoImport, loginLimit: newLoginLimiter(), wecomReplay: newReplayGuard(),
+		setup: newSetupGuard(filepath.Dir(cfg.Automation.UserAccountFile), accounts.HasUser()),
 	}
 }
 
@@ -170,6 +176,11 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "same-origin")
+		// 纵深防御：前端目前全走同源静态资源，图标是 data: URI。
+		// 万一还有未覆盖的注入点，CSP 能挡住外连与内联脚本执行。
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -272,16 +283,28 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Username   string `json:"username"`
+		Password   string `json:"password"`
+		SetupToken string `json:"setupToken"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求格式错误"})
 		return
 	}
+	// 首启抢注防护：还没有用户时必须提供一次性初始化令牌。
+	if !s.accounts.HasUser() {
+		if !s.setup.Verify(body.SetupToken) {
+			logf("首次注册被拒绝：初始化令牌缺失或不匹配（来源=%s）", clientIP(r))
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error": "初始化令牌不正确。首次部署需填写容器日志或 config/setup-token.txt 中的令牌",
+			})
+			return
+		}
+	}
 	err := s.accounts.Register(body.Username, body.Password)
 	switch {
 	case err == nil:
+		s.setup.Consume()
 		writeJSON(w, http.StatusCreated, map[string]any{"registered": true, "message": "注册成功，请登录"})
 	case errors.Is(err, errUserExists):
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
@@ -303,27 +326,30 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	username := strings.TrimSpace(r.PostFormValue("username"))
 	password := r.PostFormValue("password")
 
-	// 限速：同一 IP 或同一用户名连续失败达到阈值即锁定，避免并发撞库。
-	limitKeys := []string{"ip:" + clientIP(r)}
-	if username != "" {
-		limitKeys = append(limitKeys, "user:"+strings.ToLower(username))
-	}
-	if ok, wait := s.loginLimit.Allow(limitKeys...); !ok {
+	// 限速分两个维度：
+	//   IP 维度硬锁（攻击者自己的地址，锁了不牵连别人）；
+	//   用户名维度只递增延迟，绝不拒绝 —— 否则知道用户名就能把管理员锁死。
+	ip := clientIP(r)
+	if ok, wait := s.loginLimit.AllowIP(ip); !ok {
 		minutes := int(wait.Minutes()) + 1
-		logf("登录被限速：来源=%s 用户名=%q 剩余=%s", clientIP(r), username, wait.Round(time.Second))
+		logf("登录被限速：来源=%s 用户名=%q 剩余=%s", ip, username, wait.Round(time.Second))
 		w.Header().Set("Retry-After", fmt.Sprint(int(wait.Seconds())+1))
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{
-			"error": fmt.Sprintf("尝试次数过多，请在 %d 分钟后重试", minutes),
+			"error": fmt.Sprintf("该网络尝试次数过多，请在 %d 分钟后重试", minutes),
 		})
 		return
 	}
+	if d := s.loginLimit.Penalty(username); d > 0 {
+		logf("登录递增延迟：用户名=%q 延迟=%s", username, d)
+		time.Sleep(d)
+	}
 
 	if !s.accounts.Authenticate(username, password) {
-		s.loginLimit.Fail(limitKeys...)
+		s.loginLimit.Fail(ip, username)
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "用户名或密码错误"})
 		return
 	}
-	s.loginLimit.Reset(limitKeys...)
+	s.loginLimit.Reset(ip, username)
 
 	// 登录成功换发新会话，避免会话固定攻击。
 	oldCookie, _ := r.Cookie(sessionCookie)

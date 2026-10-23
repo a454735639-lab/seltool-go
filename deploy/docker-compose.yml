@@ -19,6 +19,10 @@ services:
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
       no_proxy: ${NO_PROXY:-localhost,127.0.0.1}
       SELTOOL_COOKIECLOUD_SYNC_CRON: ${SELTOOL_COOKIECLOUD_SYNC_CRON:-0 0 4 * * *}
+      # read_only 下 /root 不可写，Chromium 的 crashpad 会在启动时报
+      # "chrome_crashpad_handler: --database is required" 然后 SIGTRAP 崩掉
+      # （实测：不加这条，浏览器一个页面都打不开）。HOME 指到 tmpfs 即可。
+      HOME: /tmp
     volumes:
       - ./config:/app/config
       - ./data:/app/data
@@ -39,6 +43,17 @@ services:
     # 容器内的 Chromium 与抓取进程都不需要提权
     security_opt:
       - no-new-privileges:true
+    # 加固：容器只需要读写挂载进来的 config/data 和 /tmp，
+    # 其余能力一个都不用。浏览器被恶意站点打穿时，这几项能把影响面压到最小。
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+      - /run:size=16m,mode=755
+    # 兜底资源上限：Chromium 多渲染进程 + 抓取并发时不要拖垮宿主机
+    pids_limit: 512
+    mem_limit: 3g
     logging:
       driver: json-file
       options:

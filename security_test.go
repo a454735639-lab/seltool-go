@@ -6,17 +6,17 @@ import (
 	"time"
 )
 
-// 登录限速：连续失败达到阈值后必须拒绝，且锁定期过后自动恢复。
+// 登录限速：同一来源 IP 连续失败达到阈值后必须拒绝，且锁定期过后自动恢复。
 func TestLoginLimiterLockout(t *testing.T) {
 	l := newLoginLimiter()
-	keys := []string{"ip:1.2.3.4", "user:admin"}
-	for i := 0; i < maxLoginFailures; i++ {
-		if ok, _ := l.Allow(keys...); !ok {
+	const ip = "1.2.3.4"
+	for i := 0; i < maxLoginFailuresPerIP; i++ {
+		if ok, _ := l.AllowIP(ip); !ok {
 			t.Fatalf("第 %d 次失败前不应被锁", i+1)
 		}
-		l.Fail(keys...)
+		l.Fail(ip, "admin")
 	}
-	ok, wait := l.Allow(keys...)
+	ok, wait := l.AllowIP(ip)
 	if ok {
 		t.Fatal("达到失败阈值后应拒绝登录")
 	}
@@ -25,22 +25,39 @@ func TestLoginLimiterLockout(t *testing.T) {
 	}
 
 	// 登录成功会清空记录。
-	l.Reset(keys...)
-	if ok, _ := l.Allow(keys...); !ok {
+	l.Reset(ip, "admin")
+	if ok, _ := l.AllowIP(ip); !ok {
 		t.Fatal("Reset 后应恢复放行")
+	}
+}
+
+// 用户名维度绝不拒绝，只递增延迟 —— 否则知道用户名即可把管理员永久锁死。
+func TestLoginLimiterUserNeverLocked(t *testing.T) {
+	l := newLoginLimiter()
+	for i := 0; i < maxLoginFailuresPerIP*3; i++ {
+		l.Fail("ip:9.9.9.9", "admin")
+	}
+	if d := l.Penalty("admin"); d <= 0 {
+		t.Fatal("大量失败后应产生递增延迟")
+	} else if d > maxLoginDelay {
+		t.Fatalf("延迟应封顶在 %v，实际 %v", maxLoginDelay, d)
+	}
+	// 换一台机器来登录管理员账号，仍然只是延迟，不会被拒。
+	if ok, _ := l.AllowIP("ip:8.8.8.8"); !ok {
+		t.Fatal("其它 IP 不应因用户名失败而被牵连")
 	}
 }
 
 // 只锁 IP 不锁用户名：换用户名仍受同一 IP 的限制。
 func TestLoginLimiterPerIP(t *testing.T) {
 	l := newLoginLimiter()
-	for i := 0; i < maxLoginFailures; i++ {
-		l.Fail("ip:10.0.0.9", "user:u"+string(rune('a'+i)))
+	for i := 0; i < maxLoginFailuresPerIP; i++ {
+		l.Fail("10.0.0.9", "u"+string(rune('a'+i%26)))
 	}
-	if ok, _ := l.Allow("ip:10.0.0.9", "user:someone-else"); ok {
+	if ok, _ := l.AllowIP("10.0.0.9"); ok {
 		t.Fatal("同一 IP 换用户名也应被锁")
 	}
-	if ok, _ := l.Allow("ip:10.0.0.10", "user:someone-else"); !ok {
+	if ok, _ := l.AllowIP("10.0.0.10"); !ok {
 		t.Fatal("其它 IP 不应被牵连")
 	}
 }

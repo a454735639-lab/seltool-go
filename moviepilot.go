@@ -270,9 +270,21 @@ func fetchMoviePilotSiteList(cfg MoviePilotSyncConfig) ([]mpSiteEntry, error) {
 	return entries, nil
 }
 
+// mpAdminClient 访问「管理员自己配置」的 MoviePilot 地址。
+// 这个地址通常就在内网（配置示例即 http://10.0.0.40:3000），属于显式信任，
+// 不能过 netguard —— 否则功能直接不可用。第三方可控的 url 另用 iconClient。
+var mpAdminClient = &http.Client{
+	Timeout:   30 * time.Second,
+	Transport: &http.Transport{Proxy: nil},
+}
+
 // fetchMoviePilotIcon 取单个站点图标，返回 data URI。失败返回空串。
 func fetchMoviePilotIcon(cfg MoviePilotSyncConfig, siteID int) string {
-	client := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	// 两个客户端，语义不同，不能混用：
+	//   mpAdminClient → 管理员配置的 MoviePilot 接口地址（可信，允许内网）
+	//   iconClient    → MoviePilot 响应里给出的图标 url（第三方可控，必须防护）
+	client := mpAdminClient
+	iconClient := newGuardedClient(20 * time.Second)
 	endpoint := fmt.Sprintf("%s/api/v1/site/icon/%d", strings.TrimRight(cfg.URL, "/"), siteID)
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -323,12 +335,17 @@ func fetchMoviePilotIcon(cfg MoviePilotSyncConfig, siteID int) string {
 	}
 	// 只有 url 时下载后转 data URI
 	if payload.URL != "" {
+		// 关键校验：这个 URL 完全来自第三方响应。
+		if err := guardOutboundURL(payload.URL); err != nil {
+			logf("moviepilot 图标 url 被拒绝（site=%d）: %v", siteID, err)
+			return ""
+		}
 		ireq, err := http.NewRequest(http.MethodGet, payload.URL, nil)
 		if err != nil {
 			return ""
 		}
 		ireq.Header.Set("User-Agent", "seltool-go")
-		iresp, err := client.Do(ireq)
+		iresp, err := iconClient.Do(ireq)
 		if err != nil {
 			return ""
 		}

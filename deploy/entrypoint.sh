@@ -93,7 +93,13 @@ fi
 
 log "Xvfb :99 / VNC :$VNC_PORT / noVNC :$NOVNC_PORT 已启动"
 if [ "$VNC_PASSWORD_GENERATED" = "1" ]; then
-  log "未设置 SE_VNC_PASSWORD，本次随机生成：$SE_VNC_PASSWORD"
+  # 不再把口令打进容器日志：能看 docker logs 的人不该拿到已登录浏览器的控制权。
+  # 写到 0600 文件，需要时 docker exec 进去 cat。
+  VNC_PW_FILE=/app/data/vnc-password.txt
+  umask 077
+  printf '%s\n' "$SE_VNC_PASSWORD" > "$VNC_PW_FILE" 2>/dev/null || true
+  log "未设置 SE_VNC_PASSWORD，本次随机生成口令，已写入容器内 $VNC_PW_FILE（权限 600）"
+  log "查看方式：docker exec seltool-go cat /app/data/vnc-password.txt"
   log "（重启会换新口令；想固定就在 .env 里设置 SE_VNC_PASSWORD）"
 fi
 exec /app/seltool -config /app/config/custom.yml

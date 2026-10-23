@@ -129,6 +129,11 @@ const (
 	sessionTTL     = 24 * time.Hour
 	maxSessions    = 2048
 	sessionSweepAt = 256 // 每新建这么多会话顺手清一次过期项
+
+	// 匿名会话（只用于取 CSRF token，未登录）单独限额。
+	// 之前匿名和已登录共用 2048 的池子，刷满即可把管理员挤下线。
+	anonSessionTTL = 30 * time.Minute
+	maxAnonSession = 256
 )
 
 type SessionStore struct {
@@ -152,7 +157,12 @@ func randomToken(bytesLen int) string {
 func (s *SessionStore) Create(username string) (id string, sess *Session) {
 	id = randomToken(32)
 	now := time.Now()
-	sess = &Session{Username: username, CSRF: randomToken(32), ExpiresAt: now.Add(sessionTTL), LastSeen: now}
+	ttl := sessionTTL
+	if username == "" {
+		// 匿名会话只用来发 CSRF token，30 分钟足够，没必要占 24 小时。
+		ttl = anonSessionTTL
+	}
+	sess = &Session{Username: username, CSRF: randomToken(32), ExpiresAt: now.Add(ttl), LastSeen: now}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.created++
@@ -161,6 +171,7 @@ func (s *SessionStore) Create(username string) (id string, sess *Session) {
 		s.evictLocked(now)
 	}
 	s.sessions[id] = sess
+	s.trimAnonLocked(now)
 	return id, sess
 }
 
@@ -174,7 +185,44 @@ func (s *SessionStore) evictLocked(now time.Time) {
 	for len(s.sessions) >= maxSessions {
 		oldestID := ""
 		var oldest time.Time
+		// 先只找匿名会话：已登录会话不该被匿名流量挤掉。
 		for id, sess := range s.sessions {
+			if sess.Username != "" {
+				continue
+			}
+			if oldestID == "" || sess.LastSeen.Before(oldest) {
+				oldestID, oldest = id, sess.LastSeen
+			}
+		}
+		if oldestID == "" {
+			for id, sess := range s.sessions {
+				if oldestID == "" || sess.LastSeen.Before(oldest) {
+					oldestID, oldest = id, sess.LastSeen
+				}
+			}
+		}
+		if oldestID == "" {
+			return
+		}
+		delete(s.sessions, oldestID)
+	}
+}
+
+// trimAnonLocked 把匿名会话数量压回上限，且只淘汰匿名会话。
+func (s *SessionStore) trimAnonLocked(now time.Time) {
+	anon := 0
+	for _, sess := range s.sessions {
+		if sess.Username == "" {
+			anon++
+		}
+	}
+	for anon > maxAnonSession {
+		oldestID := ""
+		var oldest time.Time
+		for id, sess := range s.sessions {
+			if sess.Username != "" {
+				continue
+			}
 			if oldestID == "" || sess.LastSeen.Before(oldest) {
 				oldestID, oldest = id, sess.LastSeen
 			}
@@ -183,6 +231,7 @@ func (s *SessionStore) evictLocked(now time.Time) {
 			return
 		}
 		delete(s.sessions, oldestID)
+		anon--
 	}
 }
 

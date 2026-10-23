@@ -142,6 +142,9 @@ type weComTextMsg struct {
 	Content  string   `xml:"Content"`
 	Event    string   `xml:"Event"`
 	EventKey string   `xml:"EventKey"`
+	// CreateTime 与 MsgId 用于防重放：企业微信文本消息一定带这两个字段。
+	CreateTime int64  `xml:"CreateTime"`
+	MsgId      string `xml:"MsgId"`
 }
 
 // textReplyXML 构造明文被动回复 XML。
@@ -184,7 +187,8 @@ func (s *Server) handleWeComCallback(w http.ResponseWriter, r *http.Request) {
 	crypt, err := NewWXBizMsgCrypt(strings.TrimSpace(ns.CallbackToken), strings.TrimSpace(ns.CallbackAESKey), strings.TrimSpace(ns.CorpID))
 	if err != nil {
 		logf("wecom 回调配置错误: %v", err)
-		http.Error(w, "bad callback config: "+err.Error(), http.StatusBadRequest)
+		// 不对未认证调用方回显内部错误细节，避免探测配置状态。
+		http.Error(w, "callback not ready", http.StatusBadRequest)
 		return
 	}
 	q := r.URL.Query()
@@ -193,7 +197,7 @@ func (s *Server) handleWeComCallback(w http.ResponseWriter, r *http.Request) {
 		sig, ts, nonce := q.Get("msg_signature"), q.Get("timestamp"), q.Get("nonce")
 		echostr := q.Get("echostr")
 		logf("wecom GET 验证: ts=%s nonce=%s 签名匹配=%v echostr_len=%d", ts, nonce, crypt.Sign(ts, nonce, echostr) == sig, len(echostr))
-		if crypt.Sign(ts, nonce, echostr) != sig {
+		if !sigEqual(crypt.Sign(ts, nonce, echostr), sig) {
 			http.Error(w, "bad signature", http.StatusForbidden)
 			return
 		}
@@ -207,7 +211,8 @@ func (s *Server) handleWeComCallback(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		io.WriteString(w, plain)
 	case http.MethodPost:
-		body, _ := io.ReadAll(r.Body)
+		// 未认证端点必须限制请求体，否则任何人可打大 body 耗尽内存。
+		body, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 		var req weComEncryptReq
 		if err := xml.Unmarshal(body, &req); err != nil {
 			logf("wecom POST 解析 XML 失败: %v", err)
@@ -216,20 +221,28 @@ func (s *Server) handleWeComCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		ts, nonce, sig := q.Get("timestamp"), q.Get("nonce"), q.Get("msg_signature")
 		logf("wecom POST 收到（密文 %d 字）签名匹配=%v ts=%s nonce=%s", len(req.Encrypt), crypt.Sign(ts, nonce, req.Encrypt) == sig, ts, nonce)
-		if crypt.Sign(ts, nonce, req.Encrypt) != sig {
+		if !sigEqual(crypt.Sign(ts, nonce, req.Encrypt), sig) {
 			http.Error(w, "bad signature", http.StatusForbidden)
 			return
 		}
 		plainXML, err := crypt.Decrypt(req.Encrypt)
 		if err != nil {
 			logf("wecom POST 解密失败: %v", err)
-			http.Error(w, "decrypt failed: "+err.Error(), http.StatusBadRequest)
+			http.Error(w, "decrypt failed", http.StatusBadRequest)
 			return
 		}
 		var msg weComTextMsg
 		if err := xml.Unmarshal([]byte(plainXML), &msg); err != nil {
 			logf("wecom 解析消息失败: %v（明文前100: %.100s）", err, plainXML)
 			http.Error(w, "bad message", http.StatusBadRequest)
+			return
+		}
+		// 防重放：签名本身不含时效，必须靠时间戳窗口 + MsgId 去重兜住。
+		if msg.CreateTime == 0 && msg.MsgId == "" {
+			logf("wecom 消息缺少 CreateTime/MsgId，无法校验时效（from=%s）", msg.FromUser)
+		} else if !s.wecomReplay.Check(msg.CreateTime, msg.MsgId) {
+			logf("wecom 拒绝重放/过期消息 msgid=%q create_time=%d from=%s", msg.MsgId, msg.CreateTime, msg.FromUser)
+			http.Error(w, "replayed", http.StatusForbidden)
 			return
 		}
 		logf("wecom 收到消息 from=%s msgtype=%s content=%q", msg.FromUser, msg.MsgType, msg.Content)

@@ -422,9 +422,12 @@ func buildTaskMessage(notificationName string, targets []Target, failed []Target
 			fmt.Fprintf(&b, "\n\n**%s**", head)
 
 			for _, it := range g.items {
-				line := "· " + it.name
+				// 站点名来自第三方（MoviePilot 导入），可能是 "[点我领奖](http://evil)"。
+				// 直接拼进企微 markdown 会变成可点击链接，必须先转义元字符。
+				name := mdEsc(it.name)
+				line := "· " + name
 				if strings.HasPrefix(it.url, "http") {
-					line = fmt.Sprintf("· [%s](%s)", it.name, it.url)
+					line = fmt.Sprintf("· [%s](%s)", name, mdEscURL(it.url))
 				}
 				line += streakSuffix(it.streak, it.lastOK)
 				fmt.Fprintf(&b, "\n%s", line)
@@ -490,4 +493,21 @@ func renderMarkdownMarkers(s string) string {
 		markEnd, `</font>`,
 	)
 	return r.Replace(s)
+}
+
+// mdEsc 转义企微 markdown 的元字符，避免站点名被解释成链接/加粗/代码。
+func mdEsc(s string) string {
+	r := strings.NewReplacer(
+		"\\", "\\\\",
+		"[", "\\[", "]", "\\]",
+		"(", "\\(", ")", "\\)",
+		"*", "\\*", "_", "\\_",
+		"`", "\\`", "<", "&lt;", ">", "&gt;",
+	)
+	return r.Replace(s)
+}
+
+// mdEscURL 处理链接目标里的括号，避免提前闭合 markdown 链接。
+func mdEscURL(u string) string {
+	return strings.NewReplacer("(", "%28", ")", "%29", " ", "%20").Replace(u)
 }
