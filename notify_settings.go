@@ -25,10 +25,6 @@ type NotifySettings struct {
 	CallbackToken   string `json:"callbackToken"`
 	CallbackAESKey  string `json:"callbackAesKey"`
 	CallbackOwner   string `json:"callbackOwner"`
-	// 快捷指令 H5 页访问密钥（非空即启用 /pt-panel 数据接口）。
-	PanelKey string `json:"panelKey"`
-	// 外网访问域名（拼快捷页/菜单链接用，可省 https://）。
-	PanelHost string `json:"panelHost"`
 }
 
 func (s NotifySettings) toConfig() WeComConfig {
@@ -113,11 +109,6 @@ func (s *NotifyStore) Save(in NotifySettings) (NotifySettings, error) {
 	if in.CallbackToken == "" {
 		in.CallbackToken = s.cur.CallbackToken
 	}
-	in.PanelKey = strings.TrimSpace(in.PanelKey)
-	if in.PanelKey == "" {
-		in.PanelKey = s.cur.PanelKey
-	}
-	in.PanelHost = strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(in.PanelHost), "https://"), "http://")
 	if in.MsgType == "" {
 		in.MsgType = "markdown"
 	}
@@ -152,9 +143,6 @@ func (s NotifySettings) mask() map[string]any {
 		"hasCallbackToken":  strings.TrimSpace(s.CallbackToken) != "",
 		"callbackOwner":     s.CallbackOwner,
 		"hasCallbackAESKey": strings.TrimSpace(s.CallbackAESKey) != "",
-		"panelKey":          "",
-		"hasPanelKey":       strings.TrimSpace(s.PanelKey) != "",
-		"panelHost":         s.PanelHost,
 		"enabled":           NewWeCom(s.toConfig()).Enabled(),
 	}
 }

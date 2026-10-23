@@ -43,9 +43,6 @@ type Server struct {
 	autoImport *AutoImportStore
 	// loginLimit 登录失败限速（IP + 用户名双维度）。
 	loginLimit *loginLimiter
-	// panelTokens 快捷页短期令牌；panelLimit 限制明文密钥的尝试次数。
-	panelTokens *panelTokenStore
-	panelLimit  *loginLimiter
 }
 
 func NewServer(cfg *Config, accounts *AccountStore, sessions *SessionStore, targets *TargetStore,
@@ -59,7 +56,6 @@ func NewServer(cfg *Config, accounts *AccountStore, sessions *SessionStore, targ
 		settings: settings, cookies: cookies, notify: notify, webhook: webhook,
 		schedule: schedule, scheduler: scheduler, ptSites: ptSites, ptIcons: ptIcons, mpSync: mpSync,
 		autoImport: autoImport, loginLimit: newLoginLimiter(),
-		panelTokens: newPanelTokenStore(), panelLimit: newLoginLimiter(),
 	}
 }
 
@@ -134,12 +130,6 @@ func (s *Server) Handler() http.Handler {
 	// 企业微信「接收消息」回调（企微服务器调用，公开、按白名单鉴权）
 	mux.HandleFunc("GET /wecom/callback", s.handleWeComCallback)
 	mux.HandleFunc("POST /wecom/callback", s.handleWeComCallback)
-	// 企业微信工作台 H5 快捷指令页（页面公开，数据靠 ?key= 鉴权）
-	mux.HandleFunc("GET /pt-panel", func(w http.ResponseWriter, r *http.Request) { serveEmbedded(w, r, static, "pt-panel.html") })
-	mux.HandleFunc("POST /api/pt-panel/token", s.handlePanelToken)
-	mux.HandleFunc("GET /api/pt-panel/summary", s.handlePanelSummary)
-	mux.HandleFunc("POST /api/pt-panel/retry-failed", s.handlePanelRetryFailed)
-	mux.HandleFunc("POST /api/pt-panel/retry", s.handlePanelRetry)
 	mux.HandleFunc("POST /api/settings/wecom/quick-menu", s.requireAuth(s.requireCSRF(s.handleCreateWeComMenu)))
 	mux.HandleFunc("GET /api/settings/schedule", s.requireAuth(s.handleGetSchedule))
 	mux.HandleFunc("PUT /api/settings/schedule", s.requireAuth(s.requireCSRF(s.handleSaveSchedule)))

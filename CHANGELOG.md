@@ -6,15 +6,25 @@
 
 - **页面角落显示镜像版本号**：数据来自新接口 `GET /api/version`（公开、只返回版本字符串）。
   - 首页：头部右上角徽标
-  - 登录页 / 注册页：右下角
-  - 快捷指令页：右下角
+  - 登录页 / 注册页：左下角
   - 版本号编译期通过 `go:embed VERSION` 嵌入二进制，也可用 `-ldflags "-X main.buildVersion=x.y.z"` 覆盖。
+
+### 移除
+
+- **删除 H5 快捷指令页整套功能**（只走企业微信指令，不用网页）：
+  - 删除页面 `web/pt-panel.html` 与路由 `GET /pt-panel`
+  - 删除接口 `POST /api/pt-panel/token`、`GET /api/pt-panel/summary`、
+    `POST /api/pt-panel/retry-failed`、`POST /api/pt-panel/retry`
+    （这 4 个接口原本不走登录态、仅靠 URL 里的 `?key=` 换 2 小时令牌）
+  - 删除通知设置里的「快捷指令页密钥」「外网域名」两项，及 `panelKey`/`panelHost` 配置字段
+  - 删除 `panel.go`、`panelTokenStore`、`panelLimit`、`genPanelKey()`
+  - 「一键创建企微菜单」保留并移到「交互式命令」区域，改名为「一键创建企微指令菜单」：
+    菜单项全是 click 类型（点了发一条文字指令），本来就不需要域名和密钥
 
 ### 优化
 
-- **通知设置整理**：`交互式命令回调`（回调 Token / EncodingAESKey / 允许的微信用户）和
-  `快捷指令页`（页面密钥 / 外网域名 / 一键创建企微菜单）两块与「通知」本身无关，
-  收进默认折叠的「高级：微信内交互命令 / 快捷指令页」区域。
+- **通知设置整理**：`交互式命令回调`（回调 Token / EncodingAESKey / 允许的微信用户）
+  与「通知」本身无关，收进默认折叠的「高级：微信内交互命令」区域。
   通知设置区只保留：推送方式、Webhook、消息格式、企业微信应用凭据、API 代理、只在有失败时通知。
   字段、接口、保存逻辑均未改动，只是收纳位置变化。
 

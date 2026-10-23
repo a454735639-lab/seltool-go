@@ -274,7 +274,7 @@ func splitByBytes(s string, limit int) []string {
 
 // CreateQuickMenu 在企业微信应用底部创建「PT 保活」快捷菜单（view 型，指向 H5 快捷页）。
 // 前提：应用为 app 模式且已配置 corpid/secret/agentid。
-func (w *WeCom) CreateQuickMenu(statusURL, retryURL string) error {
+func (w *WeCom) CreateQuickMenu() error {
 	token, err := w.accessToken()
 	if err != nil {
 		return err
