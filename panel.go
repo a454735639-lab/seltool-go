@@ -143,18 +143,30 @@ func (s *Server) handlePanelSummary(w http.ResponseWriter, r *http.Request) {
 		Reason string `json:"reason"`
 	}
 	list := []fItem{}
+	// 只统计当前仍存在的目标：历史里可能残留已删除目标的记录，
+	// 否则失败清单会长期挂着不存在的目标，且 success+failed 与 total 对不上。
+	seen := make(map[string]bool, len(targets))
 	for url, rec := range latest {
+		t, ok := byURL[norm(url)]
+		if !ok {
+			continue
+		}
+		seen[norm(url)] = true
 		if rec.Success {
 			success++
 			continue
 		}
 		failed++
-		cat, _ := classifyFailure(byURL[norm(url)], rec.Message)
-		name := byURL[norm(url)].DisplayName()
+		cat, _ := classifyFailure(t, rec.Message)
+		name := t.DisplayName()
 		if name == "" {
 			name = url
 		}
 		list = append(list, fItem{Name: name, URL: url, Reason: cat})
+	}
+	notRun := len(targets) - len(seen)
+	if notRun < 0 {
+		notRun = 0
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -162,6 +174,7 @@ func (s *Server) handlePanelSummary(w http.ResponseWriter, r *http.Request) {
 		"total":      len(targets),
 		"success":    success,
 		"failed":     failed,
+		"notRun":     notRun,
 		"failedList": list,
 	})
 }

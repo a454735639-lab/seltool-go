@@ -46,7 +46,7 @@ echo "tar: $(du -sm "$TMPTAR" | awk '{print $1}')MB"
 docker import \
   -c 'ENTRYPOINT ["/usr/bin/tini","--","/app/entrypoint.sh"]' \
   -c 'WORKDIR /app' \
-  -c 'ENV DISPLAY=:99 TZ=Asia/Shanghai SELTOOL_CHROME_BIN=/usr/bin/chromium SE_VNC_PASSWORD=selenium DEBIAN_FRONTEND=noninteractive PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+  -c 'ENV DISPLAY=:99 TZ=Asia/Shanghai SELTOOL_CHROME_BIN=/usr/bin/chromium DEBIAN_FRONTEND=noninteractive PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
   -c 'EXPOSE 7900 8080' \
   "$TMPTAR" "$OUT" >/dev/null
 
