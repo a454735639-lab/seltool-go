@@ -167,13 +167,26 @@ SELTOOL_COOKIECLOUD_SYNC_CRON=0 0 4 * * *
 
 同一套默认规则对结构相近的站点**可能没有区分度**（有凭据、没凭据都报「成功」）。要确认判定是否可信，可临时把目标的 `localStorage` 手动填上无效值 —— 非空即跳过 CookieCloud 注入，等价于「无凭据」场景；判定正确时应报「登录状态检查失败」（用完整置空的凭据可让浏览器真正退回未登录态）。验完记得清空，否则手动配置会一直顶掉同步数据。
 
-### 目标直连（`noProxy`，站点被代理出口拦截时用）
+### 网络出口：按目标选直连 / 走代理（`proxyMode`）
 
-浏览器代理是**全局**的（`notify-settings.json` 的 `proxy`）。如果某个站在直连时正常、走代理时整页打不开，表现为「403 / 等待页面加载超时」，就在该目标上勾选「直连」：
+默认**直连**。每个目标可以单独指定出口：
 
-- 直连模式**不注入**全局代理，并使用独立的 profile 目录 `<userDataDir>-direct`（避免 Chromium 的 profile 单实例锁）。
-- 浏览器实例按 `proxy` / `direct` 两种模式缓存，批量执行时每个目标各取所需，只有首次切到某模式时才新建实例。
-- 直连意味着该站看到的是你本地出口 IP。PT 站若对 IP 变化敏感，开之前先确认站点规则。
+| `proxyMode` | 含义 |
+|---|---|
+| `""`（默认） | 跟随全局默认（`browser.proxy-mode`，未配置时=直连） |
+| `direct` | 强制直连：加 `--no-proxy-server`，忽略容器里的 `http_proxy` 环境变量 |
+| `proxy` | 走 `browser.proxy` 配置的代理 |
+
+- 面板里在目标卡片的「登录判定（可选）」区选「网络出口」即可，保存即生效。
+- `proxy` 只有在 `custom.yml` 里配置了 `browser.proxy` 时才生效；没配地址会自动按直连处理，并在日志里提示。
+- 两种出口各用一个独立的 profile 目录（直连是 `<userDataDir>-direct`），避免 Chromium 的 profile 单实例锁互相阻塞。
+  浏览器实例按出口缓存，批量执行时每个目标各取所需，只有首次切到某模式时才新建实例。
+- 旧字段 `noProxy: true` 仍然有效，等价于 `proxyMode: direct`。
+
+> **profile 会积累反爬 Cookie，导致「403 / 维护中」的假故障。**
+> `data/chrome-profile*` 里长期跑会堆下 `cf_clearance` 等 Cookie，被 Cloudflare 判定异常后会整站返回 403
+> 或「temporary maintenance」。排查时先换一个全新 profile 试同一 URL：
+> `docker exec seltool-go rm -rf /app/data/chrome-profile*`（删掉后下次运行自动重建，凭据本来每轮都从 CookieCloud 重新注入）。
 
 ### 站点换域名 / 一个站多个域名
 

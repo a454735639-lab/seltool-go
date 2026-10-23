@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.0.7 (2026-10-23)
+
+### 修正 1.0.6 的结论
+
+1.0.6 把「蟹黄堡 403 / 猫站维护中 / 高清时间维护中」归因为**代理出口 IP 被拦**，这个判断是错的。复核后确认：
+
+- 应用**从来没有给浏览器配过代理**（`custom.yml` 里 `browser.proxy` 为空，`SELTOOL_PROXY` 也未设置），
+  `notify-settings.json` 里的 `proxy` 只用于企微 API，与浏览器无关。
+- 真正的元凶是**旧浏览器 profile 被污染**：`data/chrome-profile` 里堆了 26 条 `cf_clearance` 等反爬 Cookie。
+  同一个站点、同一个出口，用旧 profile 抓是 `403 Forbidden` / 「temporary maintenance」/「系统维护中」，
+  换成全新 profile 就是正常登录页。1.0.6 之所以「修好了」，是因为直连模式用了另一个 profile 目录。
+
+### 新增
+
+- **按目标选择网络出口（`proxyMode`）**：`""`（跟随默认，默认直连）/ `direct`（直连）/ `proxy`（走代理）。
+  面板「登录判定（可选）」里原来的「直连」勾选框换成「网络出口」下拉框。
+- **全局默认出口 `browser.proxy-mode`**（`custom.yml`），可选 `direct`（默认）或 `proxy`。
+- 直连模式显式加 `--no-proxy-server`，不依赖容器里的 `http_proxy` 环境变量，行为可预期。
+
+### 说明
+
+- 「走代理」只有在 `browser.proxy` 配置了地址时才生效；未配置时自动按直连处理并在日志里提示。
+- 旧字段 `noProxy: true` 仍然有效（等价于 `proxyMode: direct`），1.0.6 的配置无需改动。
+
 ## 1.0.6 (2026-10-23)
 
 ### 新增

@@ -63,15 +63,18 @@ type ScheduleConfig struct {
 }
 
 type BrowserConfig struct {
-	Headless              bool     `yaml:"headless"`
-	NoSandbox             bool     `yaml:"no-sandbox"`
-	DisableDevShmUsage    bool     `yaml:"disable-dev-shm-usage"`
-	PageStaySeconds       int      `yaml:"page-stay-seconds"`
-	PageLoadTimeout       Duration `yaml:"page-load-timeout"`
-	BinaryPath            string   `yaml:"binary-path"`
-	UserDataDir           string   `yaml:"user-data-dir"`
-	DriverPath            string   `yaml:"driver-path"`
-	Proxy                 string   `yaml:"proxy"`
+	Headless           bool     `yaml:"headless"`
+	NoSandbox          bool     `yaml:"no-sandbox"`
+	DisableDevShmUsage bool     `yaml:"disable-dev-shm-usage"`
+	PageStaySeconds    int      `yaml:"page-stay-seconds"`
+	PageLoadTimeout    Duration `yaml:"page-load-timeout"`
+	BinaryPath         string   `yaml:"binary-path"`
+	UserDataDir        string   `yaml:"user-data-dir"`
+	DriverPath         string   `yaml:"driver-path"`
+	Proxy              string   `yaml:"proxy"`
+	// ProxyMode 是全局默认出口：direct（直连，默认）或 proxy（走 Proxy 配置的代理）。
+	// 单个目标可用 proxyMode 覆盖。
+	ProxyMode             string   `yaml:"proxy-mode"`
 	Arguments             []string `yaml:"arguments"`
 	DisableImages         bool     `yaml:"disable-images"`
 	BlockResourceSuffixes []string `yaml:"block-resource-suffixes"`
@@ -134,6 +137,8 @@ type Target struct {
 	LoginPath    string `yaml:"loginPath" json:"loginPath,omitempty"`
 	// NoProxy 为 true 时该目标使用直连（不注入全局代理），用于被代理出口 IP 拦截的站点。
 	NoProxy bool `yaml:"noProxy" json:"noProxy,omitempty"`
+	// ProxyMode 按目标覆盖网络出口：""（跟随全局默认）/"direct"（直连）/"proxy"（走代理）。
+	ProxyMode string `yaml:"proxyMode" json:"proxyMode,omitempty"`
 }
 
 type LocalStorage struct {
@@ -184,6 +189,7 @@ func defaultConfig() *Config {
 			PageStaySeconds:    3,
 			PageLoadTimeout:    Duration(2 * time.Minute),
 			UserDataDir:        "./data/chrome-profile",
+			ProxyMode:          "direct",
 			Arguments:          []string{"--window-size=1400,900", "--disable-gpu"},
 			DisableImages:      true,
 		},
@@ -247,6 +253,7 @@ func applyEnvOverrides(cfg *Config) {
 	setStr(&cfg.Automation.Listen, "SELTOOL_LISTEN")
 	setStr(&cfg.Automation.Browser.BinaryPath, "SELTOOL_CHROME_BIN")
 	setStr(&cfg.Automation.Browser.Proxy, "SELTOOL_PROXY")
+	setStr(&cfg.Automation.Browser.ProxyMode, "SELTOOL_PROXY_MODE")
 	setStr(&cfg.Automation.TemplatesFile, "SELTOOL_TEMPLATES_FILE")
 	setStr(&cfg.Automation.TargetsFile, "SELTOOL_TARGETS_FILE")
 	setStr(&cfg.Automation.TargetHistoryFile, "SELTOOL_HISTORY_FILE")

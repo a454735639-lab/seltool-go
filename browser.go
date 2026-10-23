@@ -107,8 +107,18 @@ func NewBrowser(cfg BrowserConfig) (*Browser, error) {
 	if strings.TrimSpace(cfg.BinaryPath) != "" {
 		opts = append(opts, chromedp.ExecPath(strings.TrimSpace(cfg.BinaryPath)))
 	}
-	if strings.TrimSpace(cfg.Proxy) != "" {
-		opts = append(opts, chromedp.ProxyServer(strings.TrimSpace(cfg.Proxy)))
+	switch strings.ToLower(strings.TrimSpace(cfg.ProxyMode)) {
+	case "direct":
+		// 显式直连：不读系统/环境代理，避免容器里的 http_proxy 干扰。
+		opts = append(opts, chromedp.Flag("no-proxy-server", true))
+	case "proxy":
+		if p := strings.TrimSpace(cfg.Proxy); p != "" {
+			opts = append(opts, chromedp.ProxyServer(p))
+		}
+	default:
+		if p := strings.TrimSpace(cfg.Proxy); p != "" {
+			opts = append(opts, chromedp.ProxyServer(p))
+		}
 	}
 	for _, arg := range cfg.Arguments {
 		arg = strings.TrimSpace(arg)

@@ -280,7 +280,7 @@ func (a *Automation) retryTransientFailures(targets []Target, cookieData map[str
 
 	for i, t := range retry {
 		logf("自动重试 %d/%d：%s", i+1, len(retry), t.DisplayName())
-		browser, err := a.browserFor(t.NoProxy)
+		browser, err := a.browserFor(t)
 		if err != nil {
 			logf("自动重试 [%s] 启动浏览器失败: %v", t.DisplayName(), err)
 			a.history.Record(t.URL, false, buildFailureMessage(err))
@@ -323,7 +323,7 @@ func (a *Automation) doExecuteTargets(targets []Target, taskName string) {
 	for i, t := range targets {
 		logf("开始处理第%d个目标 %s", i+1, t.DisplayName())
 		// 每个目标按自己的代理模式取浏览器：直连目标不挂全局代理。
-		browser, err := a.browserFor(t.NoProxy)
+		browser, err := a.browserFor(t)
 		if err != nil {
 			a.setTaskError(err)
 			logf("%s启动浏览器失败: %v", taskName, err)
@@ -374,7 +374,7 @@ func (a *Automation) doExecuteTarget(target Target) {
 		return
 	}
 
-	browser, err := a.browserFor(target.NoProxy)
+	browser, err := a.browserFor(target)
 	if err != nil {
 		logf("单独重试目标 [%s] 启动浏览器失败: %v", target.DisplayName(), err)
 		a.history.Record(target.URL, false, buildFailureMessage(err))
@@ -419,18 +419,28 @@ func (a *Automation) visitTarget(browser *Browser, target Target, cookieData map
 	return true
 }
 
-// browserMode 返回目标使用的浏览器模式键。
-func browserMode(noProxy bool) string {
-	if noProxy {
+// proxyModeFor 决定某个目标使用哪种网络出口：direct（直连）或 proxy（走代理）。
+// 优先级：目标 proxyMode > 目标 noProxy（旧字段）> 全局 browser.proxy-mode > 默认直连。
+func (a *Automation) proxyModeFor(t Target) string {
+	switch strings.ToLower(strings.TrimSpace(t.ProxyMode)) {
+	case "proxy":
+		return "proxy"
+	case "direct":
 		return "direct"
 	}
-	return "proxy"
+	if t.NoProxy {
+		return "direct"
+	}
+	if strings.EqualFold(strings.TrimSpace(a.cfg.Automation.Browser.ProxyMode), "proxy") {
+		return "proxy"
+	}
+	return "direct"
 }
 
-// browserFor 返回（必要时创建）指定模式下的浏览器实例。
-// noProxy 为 true 时不注入全局代理，并使用独立的 profile 目录。
-func (a *Automation) browserFor(noProxy bool) (*Browser, error) {
-	mode := browserMode(noProxy)
+// browserFor 返回（必要时创建）目标所需出口模式下的浏览器实例。
+// 两种模式各用一个独立的 profile 目录，避免 Chromium 的 profile 单实例锁互相阻塞。
+func (a *Automation) browserFor(t Target) (*Browser, error) {
+	mode := a.proxyModeFor(t)
 
 	a.runMu.Lock()
 	defer a.runMu.Unlock()
@@ -447,19 +457,27 @@ func (a *Automation) browserFor(noProxy bool) (*Browser, error) {
 	}
 
 	cfg := a.cfg.Automation.Browser
-	if noProxy {
+	if mode == "proxy" && strings.TrimSpace(cfg.Proxy) == "" {
+		// 没配代理地址时「走代理」无从谈起，按直连处理，避免静默失败。
+		logf("目标 [%s] 设置为走代理，但未配置 browser.proxy，改按直连处理", t.DisplayName())
+		mode = "direct"
+	}
+	cfg.ProxyMode = mode
+	if mode == "direct" {
 		cfg.Proxy = ""
 		if dir := strings.TrimSpace(cfg.UserDataDir); dir != "" {
 			cfg.UserDataDir = dir + "-direct"
 		}
-		logf("目标直连模式：本次浏览器不使用代理（profile=%s）", cfg.UserDataDir)
+	} else if dir := strings.TrimSpace(cfg.UserDataDir); dir != "" {
+		// 两种出口用各自独立的 profile，避免互相污染，也避开 Chromium 的单实例锁。
+		cfg.UserDataDir = dir + "-proxy"
 	}
 
 	b, err := NewBrowser(cfg)
 	if err != nil {
 		return nil, err
 	}
-	logf("已创建新的浏览器会话（模式：%s）", mode)
+	logf("已创建新的浏览器会话（出口：%s）", mode)
 	a.browsers[mode] = b
 	return b, nil
 }
