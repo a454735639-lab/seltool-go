@@ -23,6 +23,8 @@ services:
       # "chrome_crashpad_handler: --database is required" 然后 SIGTRAP 崩掉
       # （实测：不加这条，浏览器一个页面都打不开）。HOME 指到 tmpfs 即可。
       HOME: /tmp
+      # 浏览器出口代理，留空 = 直连。见 .env.example 的说明。
+      SELTOOL_PROXY: ${SELTOOL_PROXY:-}
     volumes:
       - ./config:/app/config
       - ./data:/app/data
