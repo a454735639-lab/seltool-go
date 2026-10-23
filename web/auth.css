@@ -9,5 +9,5 @@ button{width:100%;margin-top:20px;padding:11px;border:1px solid #ffffff38;border
 .message{display:none;margin-top:15px;padding:10px;border:1px solid #ffffff9c;border-radius:9px;font-size:13px;box-shadow:inset 0 1px #ffffffbf;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}.message:not(:empty){display:block}.message.error{color:#b42318;background:#fef3f2bd}.message.success{color:#067647;background:#ecfdf3bd}.loading{color:var(--muted);text-align:center}
 
 /* 版本号角标 */
-.auth-version{position:fixed;right:16px;bottom:14px;z-index:2;font:11.5px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);letter-spacing:.02em;font-variant-numeric:tabular-nums;opacity:.75;pointer-events:none;user-select:none}
+.auth-version{position:fixed;left:16px;bottom:14px;z-index:2;font:11.5px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);letter-spacing:.02em;font-variant-numeric:tabular-nums;opacity:.75;pointer-events:none;user-select:none}
 .auth-version:empty{display:none}
