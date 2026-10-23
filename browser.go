@@ -713,10 +713,6 @@ func containsAny(haystack string, needles ...string) bool {
 	return false
 }
 
-func buildWarmupURL(target Target) string {
-	return buildWarmupURLFor(target, target.URL)
-}
-
 // buildWarmupURLFor 用实际要访问的 URL 构造预热地址，保证预热和目标同源。
 func buildWarmupURLFor(target Target, visitURL string) string {
 	u, err := url.Parse(strings.TrimSpace(visitURL))

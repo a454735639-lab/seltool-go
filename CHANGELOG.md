@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.0.8 (2026-10-23)
+
+### 清理
+
+纯仓库清理，**运行时行为与 1.0.6 完全一致**，不含功能改动。
+
+- 删除一次性调试脚本：`audit-image.sh`、`bisect-vnc.sh`、`preview.sh`、`test-reclaimable.sh`、
+  `test-reclaimable2.sh`、`verify_schedule.py`、`progress.md`。
+- 删除 `acceptance/`（26 个一次性验收脚本，自带独立 `go.mod` 模块 `seltool-acceptance-tools`，
+  与主模块无引用关系）。
+- 删除 `.gitea/workflows/build-image.yml`（Gitea 时代的旧 CI，仓库迁移到 GitHub 后已分叉且不再触发）。
+- 删除 `docs/superpowers/plans/`（2026-10-18 的规划文档）。
+- 删除已失效的本地构建链：`scripts/build.sh`（写死 `image/deploy/Dockerfile.f1`，而仓库中并无 `image/` 目录，
+  实际依赖 NAS 上的 `/volume1/docker/seltool-f1-work` 工作副本）、`scripts/deploy-and-backup.sh`、
+  `scripts/check-frontend.py`、`scripts/backup-obsidian.sh`、`make-runtime-slim.sh`、`make-runtime-slim2.sh`、
+  `deploy/Dockerfile.slim`、`deploy/Dockerfile.ci`、`deploy/Dockerfile.f1`、`deploy/Dockerfile.safe`。
+  镜像构建统一走 CI 的 `deploy/Dockerfile.multiarch`（README 的「本地构建」章节已同步更新）。
+- 删除 3 处无人调用的 Go 函数：`browser.go` 的 `buildWarmupURL()`（实际调用点是 `buildWarmupURLFor()`）、
+  `notify_format.go` 的 `mdLinkText()`、`targets.go` 的 `(*TargetStore).templateStore()`。
+
+### 说明
+
+- 1.0.7（按目标选择网络出口）已回退，代码保留在分支 `v1.0.7-wip`，未合并。
+  回退原因：全局默认改直连后，GTK、PT时间 两站失败（1.0.6 时它们走默认 profile，带有历史 `cf_clearance`；
+  切换出口时 profile 一并更换，导致 clearance 丢失）。
+- 保留 `cmd/dropcache`、`cmd/httpprobe`（容器内排障用的小工具，不参与镜像构建）。
+
 ## 1.0.6 (2026-10-23)
 
 ### 新增

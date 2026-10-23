@@ -1,7 +1,0 @@
-ARG RUNTIME_IMAGE=seltool-go:rollback-20261018
-FROM ${RUNTIME_IMAGE}
-WORKDIR /app
-COPY seltool /app/seltool
-COPY vncproxy /app/vncproxy
-COPY deploy/entrypoint.sh /app/entrypoint.sh
-ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]

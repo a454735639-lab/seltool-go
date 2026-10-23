@@ -241,12 +241,10 @@ golang 交叉编译 → debian:bookworm-slim 装 chromium/Xvfb/x11vnc → 多架
 ### 本地构建
 
 ```sh
-sh scripts/build.sh            # 校验 → 编译 → 构建 → 部署
-sh scripts/build.sh --no-deploy
+docker build -f deploy/Dockerfile.multiarch -t seltool-go:local .
 ```
 
-依赖本地的 `seltool-go:runtime-slim2` 基础镜像（比完整 Selenium 镜像小 300MB），
-丢了用 `sh scripts/build.sh --base` 重建。
+单架构本地构建用同一条命令即可（buildx 不在时自动退化为单架构）。
 
 ## 数据与备份
 

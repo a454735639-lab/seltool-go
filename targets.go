@@ -77,12 +77,6 @@ func (s *TargetStore) SetTemplates(templates *TemplateStore) {
 	s.templates = templates
 }
 
-func (s *TargetStore) templateStore() *TemplateStore {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.templates
-}
-
 func (s *TargetStore) Load() error {
 	data, err := os.ReadFile(s.file)
 	if err != nil {

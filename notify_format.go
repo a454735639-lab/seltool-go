@@ -232,12 +232,6 @@ func humanDuration(d time.Duration) string {
 	return fmt.Sprintf("%d 小时 %d 分", s/3600, s%3600/60)
 }
 
-func mdLinkText(s string) string {
-	s = strings.TrimSpace(s)
-	r := strings.NewReplacer("[", "(", "]", ")", "|", "/", "\n", " ")
-	return r.Replace(s)
-}
-
 // ══════════════════════════════════════════════════════════
 // 新版排版：按「失败原因」分组，同类站点聚在一起
 // ══════════════════════════════════════════════════════════
