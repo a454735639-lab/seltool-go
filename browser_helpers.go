@@ -112,6 +112,49 @@ func acquireProfile(ctx context.Context, dir string) (func(), error) {
 	}
 	return release, nil
 }
+
+// profileCacheDirs 列出 Chromium 会写入磁盘的网络缓存目录（相对 profile 根目录）。
+// 这些目录只缓存网络响应，删除不影响身份数据 —— Cookies、Login Data、Local Storage
+// 都不在列表内，所以清理不会导致掉登录。
+var profileCacheDirs = []string{
+	filepath.Join("Default", "Cache"),
+	filepath.Join("Default", "Code Cache"),
+	filepath.Join("Default", "GPUCache"),
+	filepath.Join("Default", "DawnGraphiteCache"),
+	filepath.Join("Default", "DawnWebGPUCache"),
+	filepath.Join("Default", "Service Worker", "CacheStorage"),
+	filepath.Join("Default", "Service Worker", "ScriptCache"),
+	"GrShaderCache",
+	"ShaderCache",
+}
+
+// clearProfileCache 在浏览器启动前清空磁盘 HTTP 缓存。
+//
+// 为什么每次启动都要清：profile 是持久化的，Chromium 会把响应写进磁盘缓存，而缓存
+// 不区分「这是一次错误响应」。实测 cspt.top 早先某次真实的 403 被写进缓存后，之后每次
+// 运行都直接从缓存返回那 403（跨天、跨重启一致），表现为该站永久失败 —— 而同一份
+// CookieCloud cookie 用 curl 直连/走代理都是 200，Lightpanda 也拿到已登录首页。
+// 站点侧完全看不到请求，日志只显示「导航成功但标题是 403」，极易误判成反爬或 cookie 失效。
+// 清掉缓存后立刻恢复「财神 :: 首页」已登录（连测 3 次稳定）。
+//
+// 代价可忽略：本站场景每个站点每轮只访问一次，磁盘缓存几乎无收益。
+func clearProfileCache(dir string) error {
+	var errs []string
+	for _, rel := range profileCacheDirs {
+		p := filepath.Join(dir, rel)
+		if _, err := os.Lstat(p); os.IsNotExist(err) {
+			continue
+		}
+		if err := os.RemoveAll(p); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", rel, err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
 func prepareProfile(dir string) error {
 	lock := filepath.Join(dir, "SingletonLock")
 	if target, err := os.Readlink(lock); err == nil {
@@ -146,6 +189,11 @@ func prepareProfile(dir string) error {
 		if e = os.Remove(p); e != nil {
 			return e
 		}
+	}
+	// 磁盘 HTTP 缓存会让历史错误响应「复活」，详见 clearProfileCache 的注释。
+	// 清理失败不阻断启动 —— 最坏情况只是个别站点读到旧响应，不该因此整轮跑不起来。
+	if err := clearProfileCache(dir); err != nil {
+		logf("清理浏览器磁盘缓存失败（继续启动）: %v", err)
 	}
 	return nil
 }

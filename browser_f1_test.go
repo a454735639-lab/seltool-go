@@ -169,3 +169,77 @@ func TestF1EffectiveTargetURL(t *testing.T) {
 		t.Fatalf("path lost: %s", u)
 	}
 }
+// 回归：磁盘 HTTP 缓存必须清理，但身份数据（Cookies / Login Data / Local Storage）必须保留。
+// 背景：cspt.top 早先一次真实 403 被写进 profile 的磁盘缓存后，每次运行都从缓存返回该 403，
+// 表现为该站永久失败（cookie 其实是好的）。清缓存后立即恢复已登录首页。
+func TestF1ProfileCacheIsClearedButIdentityKept(t *testing.T) {
+	dir := t.TempDir()
+
+	// 造出生产 profile 里实测观察到的缓存目录布局
+	cacheFiles := []string{
+		filepath.Join("Default", "Cache", "Cache_Data", "f_000001"),
+		filepath.Join("Default", "Code Cache", "js", "0"),
+		filepath.Join("Default", "GPUCache", "d"),
+		filepath.Join("Default", "Service Worker", "CacheStorage", "x"),
+		filepath.Join("GrShaderCache", "GPUCache", "y"),
+	}
+	for _, rel := range cacheFiles {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("stale"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	identity := []string{
+		filepath.Join("Default", "Cookies"),
+		filepath.Join("Default", "Login Data"),
+		filepath.Join("Default", "Local Storage", "leveldb", "CURRENT"),
+	}
+	for _, rel := range identity {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("keep"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := clearProfileCache(dir); err != nil {
+		t.Fatalf("clearProfileCache: %v", err)
+	}
+	for _, rel := range cacheFiles {
+		if _, err := os.Lstat(filepath.Join(dir, rel)); !os.IsNotExist(err) {
+			t.Errorf("缓存残留未清: %s", rel)
+		}
+	}
+	for _, rel := range identity {
+		if _, err := os.Lstat(filepath.Join(dir, rel)); err != nil {
+			t.Errorf("身份数据被误删: %s (%v)", rel, err)
+		}
+	}
+	// 幂等：目录已不存在时不得报错（每轮启动都会调用）
+	if err := clearProfileCache(dir); err != nil {
+		t.Fatalf("重复清理不应报错: %v", err)
+	}
+}
+
+// 回归：prepareProfile 是启动路径上的必经点，必须真的清掉缓存。
+func TestF1PrepareProfileClearsCache(t *testing.T) {
+	dir := t.TempDir()
+	cacheFile := filepath.Join(dir, "Default", "Cache", "Cache_Data", "f_000001")
+	if err := os.MkdirAll(filepath.Dir(cacheFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cacheFile, []byte("stale403"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareProfile(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(cacheFile); !os.IsNotExist(err) {
+		t.Fatal("prepareProfile 未清除磁盘缓存，历史错误响应会「复活」")
+	}
+}

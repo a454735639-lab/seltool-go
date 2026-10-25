@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.10 (2026-10-25)
+
+### 修复
+
+- **持久化 profile 的磁盘 HTTP 缓存导致站点「永久假失败」**（实测站：cspt.top 403）：
+  - Chromium 会把响应写进 `data/chrome-profile` 的磁盘缓存，而缓存**不区分错误响应**。早先某次真实的 403 被缓存后，之后每次运行都直接从缓存返回那条 403（跨天、跨重启表现一致），站点侧完全看不到请求，日志只显示「导航成功但标题是 403」—— 极易误判成反爬拦截或 cookie 失效。
+  - 定位证据：同一份 CookieCloud cookie，用 curl 直连/走代理、以及 Lightpanda 均正常（200 / 108 KB 已登录首页）；换全新 profile 正常；**复制生产 profile 必现 403**；手动删除缓存目录后立即恢复「财神 :: 首页」已登录（连测 3 次稳定）。
+  - 修复：浏览器启动前清空磁盘缓存目录（`prepareProfile` 中调用新增的 `clearProfileCache`），只删 `Cache` / `Code Cache` / `GPUCache` / `Service Worker` 等缓存目录，**保留 Cookies、Login Data、Local Storage 等身份数据**。清理失败仅记日志，不阻断启动。
+  - 附带收益：生产 profile 由 144 MB 降至 61 MB（释放 83 MB 磁盘）。
+  - 新增回归测试 `TestF1ProfileCacheIsClearedButIdentityKept`、`TestF1PrepareProfileClearsCache`。
+
+### 说明
+
+- 未改动任何站点判定逻辑与目标配置；对 43 个站点的影响仅限「不再读到历史错误响应」。
+
 ## 1.0.9 (2026-10-23)
 
 ### 新增
