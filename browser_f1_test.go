@@ -169,6 +169,7 @@ func TestF1EffectiveTargetURL(t *testing.T) {
 		t.Fatalf("path lost: %s", u)
 	}
 }
+
 // 回归：磁盘 HTTP 缓存必须清理，但身份数据（Cookies / Login Data / Local Storage）必须保留。
 // 背景：cspt.top 早先一次真实 403 被写进 profile 的磁盘缓存后，每次运行都从缓存返回该 403，
 // 表现为该站永久失败（cookie 其实是好的）。清缓存后立即恢复已登录首页。
