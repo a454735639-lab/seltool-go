@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.11 (2026-10-25)
+
+### 改进
+
+- **失败原因归因：区分「Cloudflare 人机挑战」与「CookieCloud 未采集到该站 Cookie」**
+  - 背景：这两个原因原本都只显示「登录状态检查失败（页面含登录表单）」，与真正的 Cookie 失效无法区分。1.0.10 上线核验时，9 个失败站里有 5 个是「CookieCloud 缓存中该域 0 条 Cookie」、1 个是 CF 挑战页，全靠人工逐个实测才分清。
+  - **CF 挑战**：失败原因改写为「被 Cloudflare 人机挑战拦截（<原判定>）：需人工过一次，自动重试无法恢复」。判定只认强特征 —— 挑战页标题（`Just a moment...` / `Attention Required` / `Checking your browser` / `请稍候` / `正在验证` 等），或挑战页专有节点（`#cf-challenge-running`、`.cf-browser-verification`、`#challenge-form`、`challenges.cloudflare.com` 的 iframe）。**不按 `challenge-platform` / `turnstile` 这类脚本名匹配**：普通页面（含 NexusPHP 登录页）也会内联，按字符串匹配会大面积误判。
+  - CF 挑战**不再触发 CookieCloud 刷新**：与 Cookie 无关，此前每个挑战站每轮都会白拉一次远端数据。
+  - **未采集到 Cookie**：失败原因追加「；本轮未解析到任何 CookieCloud Cookie（该站 Cookie 未被采集）」。这条**仍会触发一次刷新** —— 用户刚在浏览器重新推送 Cookie 时，刷新能把新数据拉进来。
+  - 新增单测 `TestF1AnnotateLoginFailureCloudflare`、`TestF1AnnotateLoginFailureNoCookies`、`TestF1AnnotateLoginFailurePassthrough`、`TestF1AnnotateLoginFailurePrefersCloudflare`、`TestF1CFChallengeScriptTargetsStrongMarkers`。
+
+### 说明
+
+- 只改失败原因的措辞与归类；站点判定逻辑、目标配置、成功路径行为一律未动。
+- 未部署到生产，等待确认。
+
 ## 1.0.10 (2026-10-25)
 
 ### 修复

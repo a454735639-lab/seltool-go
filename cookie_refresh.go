@@ -15,6 +15,10 @@ import "strings"
 func isCookieFailure(reason string) bool {
 	m := strings.ToLower(reason)
 	switch {
+	case strings.Contains(reason, "Cloudflare 人机挑战"):
+		// CF 挑战与 Cookie 无关：刷新 CookieCloud 不会让挑战通过，避免无谓的远端请求。
+		// 这条必须在「登录状态检查失败」之前判断 —— CF 归因里嵌了原始原因。
+		return false
 	case strings.Contains(reason, "Cookie 缺失"):
 		return true
 	case strings.Contains(reason, "登录状态检查失败"):

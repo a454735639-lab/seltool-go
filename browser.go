@@ -311,6 +311,9 @@ func (b *Browser) Visit(target Target, cookies []Cookie) error {
 		if b.browserCtx.Err() != nil || tabCtx.Err() != nil || strings.Contains(reason, "浏览器已关闭") {
 			return b.classify(target, fmt.Errorf("%w: %s", ErrBrowserClosed, reason))
 		}
+		// 归因：区分「CF 人机挑战」与「压根没解析到 Cookie」。
+		// 两者原本都只显示泛泛的「登录状态检查失败」，实测里被当成 cookie 失效/反爬猜了很久。
+		reason = annotateLoginFailure(reason, len(cookies), b.isCloudflareChallenge(tabCtx, target))
 		return fmt.Errorf("%s", reason)
 	}
 
@@ -560,6 +563,49 @@ func (b *Browser) classify(target Target, err error) error {
 		return fmt.Errorf("%w: %v", ErrBrowserClosed, err)
 	}
 	return err
+}
+
+// annotateLoginFailure 给登录态失败原因补上更有诊断价值的上下文。
+// 纯函数（与浏览器无关），便于单测。
+//
+// 背景：生产 43 个目标里最常见的两类误诊 —— 站点其实是被 Cloudflare 人机挑战拦下、
+// 或者 CookieCloud 压根没采集到该站 Cookie —— 原本都只报「登录状态检查失败（页面含登录表单）」，
+// 与真正的 Cookie 失效无法区分，排查时只能逐个手测。
+func annotateLoginFailure(reason string, cookieCount int, cfChallenge bool) string {
+	switch {
+	case cfChallenge:
+		// 挑战与 Cookie 无关：刷新 CookieCloud、换 UA 都不会让它通过，必须人工过一次。
+		return "被 Cloudflare 人机挑战拦截（" + reason + "）：需人工过一次，自动重试无法恢复"
+	case cookieCount == 0:
+		// 一个 Cookie 都没解析到 = 采集侧就没数据，问题不在站点判定或会话过期。
+		return reason + "；本轮未解析到任何 CookieCloud Cookie（该站 Cookie 未被采集）"
+	default:
+		return reason
+	}
+}
+
+// cfChallengeScript 在页面上下文里判断当前是否为 Cloudflare 拦截页。
+//
+// 只认强特征：挑战页标题，或挑战页专有的 DOM 节点。
+// 故意不看页面内联的 challenge-platform / turnstile 脚本字符串 —— 普通页面
+// （含 NexusPHP 登录页）也会内联这些脚本，按字符串匹配会大面积误判。
+const cfChallengeScript = `(() => {
+	const t = document.title || "";
+	if (/just a moment|attention required|checking your browser|verifying you are human/i.test(t)) return true;
+	const zh = ["请稍候", "正在检查", "人机验证", "验证您是真人", "正在验证"];
+	for (const k of zh) { if (t.indexOf(k) >= 0) return true; }
+	return !!document.querySelector("#cf-challenge-running,.cf-browser-verification,#challenge-form,iframe[src*='challenges.cloudflare.com']");
+})()`
+
+// isCloudflareChallenge 判断当前页面是否为 Cloudflare 人机挑战页。
+// 读不到页面时按「不是」处理，避免把浏览器异常当成挑战页。
+func (b *Browser) isCloudflareChallenge(ctx context.Context, target Target) bool {
+	hit, err := runValue(ctx, 6*time.Second, chromedp.Evaluate[bool](cfChallengeScript))
+	if err != nil {
+		logf("目标 [%s] CF 挑战页判定失败: %v", target.DisplayName(), err)
+		return false
+	}
+	return hit
 }
 
 // checkStatus 判定登录态，优先级：
