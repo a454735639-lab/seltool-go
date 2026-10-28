@@ -1,4 +1,4 @@
-module github.com/linzaixian888/selenium-tool
+module github.com/a454735639-lab/seltool-go
 
 go 1.25
 

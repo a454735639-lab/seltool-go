@@ -1,3 +1,5 @@
+//go:build linux
+
 // dropcache 对指定文件调用 posix_fadvise(POSIX_FADV_DONTNEED)，
 // 让内核丢弃该文件的页缓存。不需要 root，只要文件可读。
 //

@@ -129,9 +129,17 @@ SELTOOL_COOKIECLOUD_SYNC_CRON=0 0 4 * * *
 | `VNCPROXY_ALLOWED_HOSTS` | noVNC 允许的 Host，反代时加域名 |
 | `NO_PROXY` | 代理排除列表 |
 | `SELTOOL_COOKIECLOUD_SYNC_CRON` | CookieCloud 每日同步时间，默认 `0 0 4 * * *` |
+| `SELTOOL_TRUSTED_PROXIES` | 可信反代 IP/CIDR，逗号分隔；留空 = 只信任回环 |
 
 > 端口变量不能叫 `VNC_PORT` / `HTTP_PORT` —— 容器内 entrypoint 用这两个名字
 > 控制 x11vnc 和 web 监听，注入会把内部端口改乱。
+
+> **用了反向代理时注意 `SELTOOL_TRUSTED_PROXIES`**：面板只对白名单来源发来的
+> `X-Forwarded-For` / `X-Forwarded-Proto` 采信（默认只信回环，也就是 nginx 直接
+> 跑在宿主机上的情况）。反代本身也在容器里时，源地址是 `172.x`，必须把该网段填进来，
+> 否则所有客户端会被算成同一个 IP —— 登录限速变成全站共用一个计数，会话 cookie
+> 也拿不到 `Secure`。启动日志里出现「检测到来自 … 的转发头，但不在 trusted-proxies」
+> 就是这一项没配。
 
 ### 应用级 → Web 面板
 

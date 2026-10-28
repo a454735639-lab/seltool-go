@@ -44,6 +44,9 @@ type Server struct {
 	autoImport *AutoImportStore
 	// loginLimit 登录失败限速（IP 硬锁 + 用户名递增延迟）。
 	loginLimit *loginLimiter
+	// loginSlots 限制并发登录尝试数：用户名维度的递增延迟是在 handler 里
+	// time.Sleep 出来的，不限并发就等于给了攻击者一个堆 goroutine 的开关。
+	loginSlots chan struct{}
 	// wecomReplay 企微回调防重放（时间戳窗口 + MsgId 去重）。
 	wecomReplay *replayGuard
 	// setup 首次注册的一次性令牌，防止公网抢注管理员。
@@ -61,7 +64,22 @@ func NewServer(cfg *Config, accounts *AccountStore, sessions *SessionStore, targ
 		settings: settings, cookies: cookies, notify: notify, webhook: webhook,
 		schedule: schedule, scheduler: scheduler, ptSites: ptSites, ptIcons: ptIcons, mpSync: mpSync,
 		autoImport: autoImport, loginLimit: newLoginLimiter(), wecomReplay: newReplayGuard(),
-		setup: newSetupGuard(filepath.Dir(cfg.Automation.UserAccountFile), accounts.HasUser()),
+		loginSlots: make(chan struct{}, maxConcurrentLogins),
+		setup:      newSetupGuard(filepath.Dir(cfg.Automation.UserAccountFile), accounts.HasUser()),
+	}
+}
+
+// tryAcquireLoginSlot 取一个并发登录名额；满员返回 ok=false。
+// release 始终非 nil，调用方直接 defer 即可。
+func (s *Server) tryAcquireLoginSlot() (release func(), ok bool) {
+	if s.loginSlots == nil {
+		return func() {}, true
+	}
+	select {
+	case s.loginSlots <- struct{}{}:
+		return func() { <-s.loginSlots }, true
+	default:
+		return nil, false
 	}
 }
 
@@ -339,6 +357,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// 递增延迟是「占着连接睡觉」，必须限量：否则慢速撞库可以把并发登录堆到
+	// 任意数量，每个都占一个 goroutine 加一次 bcrypt。
+	releaseSlot, ok := s.tryAcquireLoginSlot()
+	if !ok {
+		w.Header().Set("Retry-After", "5")
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "登录请求过于频繁，请稍后重试"})
+		return
+	}
+	defer releaseSlot()
 	if d := s.loginLimit.Penalty(username); d > 0 {
 		logf("登录递增延迟：用户名=%q 延迟=%s", username, d)
 		time.Sleep(d)
@@ -694,6 +721,10 @@ func mergeTargetsOverwrite(incoming, existing []Target, overwrite bool) (added [
 	seenKey := map[string]bool{}
 	regIdx := map[string]int{}
 	hostIdx := map[string]int{}
+	// addedIdx 记录本轮新增项在 added 里的下标。
+	// 不能复用 hostIdx：它的值是 existing 的下标，拿它去索引一个还没落库的
+	// 新目标会直接越界 panic（同域不同路径的第二次导入就会触发）。
+	addedIdx := map[string]int{}
 	for i, t := range existing {
 		raw := strings.TrimSpace(t.URL)
 		if raw == "" {
@@ -715,6 +746,16 @@ func mergeTargetsOverwrite(incoming, existing []Target, overwrite bool) (added [
 		}
 		if n := strings.TrimSpace(t.Name); n != "" && existing[i].Name != n {
 			existing[i].Name = n
+			return true
+		}
+		return false
+	}
+	applyAdded := func(i int, t Target) bool {
+		if !overwrite {
+			return false
+		}
+		if n := strings.TrimSpace(t.Name); n != "" && added[i].Name != n {
+			added[i].Name = n
 			return true
 		}
 		return false
@@ -745,6 +786,15 @@ func mergeTargetsOverwrite(incoming, existing []Target, overwrite bool) (added [
 			}
 			continue
 		}
+		// 同主机在本轮里已经新增过：按「重复」处理，改名也只作用于待新增的那条。
+		if i, ok := addedIdx[host]; ok && host != "" {
+			if applyAdded(i, t) {
+				updated++
+			} else {
+				skipped++
+			}
+			continue
+		}
 		if reg := registeredDomain(raw); reg != "" {
 			if i, ok := regIdx[reg]; ok {
 				if apply(i, t) {
@@ -757,7 +807,7 @@ func mergeTargetsOverwrite(incoming, existing []Target, overwrite bool) (added [
 		}
 		seenKey[canonicalURLKey(raw)] = true
 		if host != "" {
-			hostIdx[host] = len(existing) + len(added)
+			addedIdx[host] = len(added)
 		}
 		added = append(added, t)
 	}
@@ -867,9 +917,27 @@ func (s *Server) handleSaveNotify(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "群机器人模式必须填写 Webhook 地址"})
 		return
 	}
-	if body.Mode == "app" && (strings.TrimSpace(body.CorpID) == "" || body.AgentID <= 0) {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "应用模式必须填写企业ID和AgentId"})
-		return
+	// 应用模式必须三项齐全才发得出去：WeCom.Enabled() 要求 corpid + corpsecret + agentid。
+	// 旧实现漏了 corpsecret，于是「没填 Secret」的实例也提示保存成功，而实际发送时
+	// 因为 Enabled()==false 被静默跳过 —— 日志里连一行都没有。
+	// 面板不回显 Secret，留空表示沿用已保存的值，所以要和当前值合并后再判。
+	if body.Mode == "app" {
+		cur := s.notify.Current()
+		secret := strings.TrimSpace(body.CorpSecret)
+		if secret == "" {
+			secret = strings.TrimSpace(cur.CorpSecret)
+		}
+		switch {
+		case strings.TrimSpace(body.CorpID) == "":
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "应用模式必须填写企业ID（corpid）"})
+			return
+		case body.AgentID <= 0:
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "应用模式必须填写 AgentId"})
+			return
+		case secret == "":
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "应用模式必须填写应用 Secret（corpsecret），否则消息发不出去"})
+			return
+		}
 	}
 	saved, err := s.notify.Save(body)
 	if err != nil {
@@ -882,6 +950,10 @@ func (s *Server) handleSaveNotify(w http.ResponseWriter, r *http.Request) {
 	}
 	out := saved.mask()
 	out["message"] = "已保存并生效"
+	if !NewWeCom(saved.toConfig()).Enabled() {
+		// 兜底：任何模式下没配齐都如实告诉用户，别让「已保存并生效」变成空话。
+		out["message"] = "已保存，但通知尚未启用：当前模式的必填项不完整"
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 

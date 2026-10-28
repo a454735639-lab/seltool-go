@@ -1,8 +1,6 @@
 package main
 
 import (
-	"net"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +25,9 @@ const (
 	userDelayAfterFails = 3 // 用户名维度第几次失败开始加延迟
 	userDelayBase       = 250 * time.Millisecond
 	maxLoginDelay       = 3 * time.Second
+
+	// maxConcurrentLogins 限制同时在跑的登录尝试数（见 Server.loginSlots）。
+	maxConcurrentLogins = 8
 )
 
 type loginFailEntry struct {
@@ -150,58 +151,4 @@ func (l *loginLimiter) Reset(ip, username string) {
 	defer l.mu.Unlock()
 	delete(l.items, ipKey(ip))
 	delete(l.items, userKey(username))
-}
-
-// clientIP 取请求来源 IP。
-//
-// 反代（nginx `$proxy_add_x_forwarded_for`）会把真实客户端地址追加在
-// X-Forwarded-For 的最右边，左边的段是客户端自己可以随便写的。旧实现取第一段，
-// 于是伪造 X-Forwarded-For 就能无限轮换「IP」绕过限速。这里改取最后一段。
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err != nil {
-		host = strings.TrimSpace(r.RemoteAddr)
-	}
-	if !isPrivateAddr(host) {
-		return host
-	}
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff == "" {
-		return host
-	}
-	parts := strings.Split(xff, ",")
-	last := strings.TrimSpace(parts[len(parts)-1])
-	if net.ParseIP(last) != nil {
-		return last
-	}
-	return host
-}
-
-func isPrivateAddr(host string) bool {
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return false
-	}
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
-}
-
-// isHTTPS 判断本次请求是否走 HTTPS。反代终止 TLS 时 r.TLS 恒为 nil，
-// 只靠它会让 Secure 永远为 false（会话 cookie 可被明文链路窃取）。
-// 因此仅在来源是内网/回环（即本机反代）时才采信 X-Forwarded-Proto，避免外部
-// 客户端伪造该头导致自己拿不到 cookie。
-func isHTTPS(r *http.Request) bool {
-	if r.TLS != nil {
-		return true
-	}
-	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err != nil {
-		host = strings.TrimSpace(r.RemoteAddr)
-	}
-	if !isPrivateAddr(host) {
-		return false
-	}
-	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
-		return true
-	}
-	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Ssl")), "on")
 }

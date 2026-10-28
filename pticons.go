@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -188,9 +187,16 @@ func (t *PTIconTable) Replace(raw []byte) (int, error) {
 		return 0, fmt.Errorf("图标表为空")
 	}
 	clean := make(map[string]string, len(f.Icons))
+	dropped := 0
 	for k, v := range f.Icons {
 		key := normalizeIconKey(k)
 		if key == "" || v == "" {
+			continue
+		}
+		// 与构造函数走同一套校验：只判空会让 HTML 错误页、非图片 data URI
+		// 直接落盘，前端拼进 innerHTML 后就是可执行内容。
+		if !looksLikeImage(v) {
+			dropped++
 			continue
 		}
 		clean[key] = v
@@ -198,15 +204,11 @@ func (t *PTIconTable) Replace(raw []byte) (int, error) {
 	if len(clean) == 0 {
 		return 0, fmt.Errorf("没有有效的图标条目")
 	}
+	if dropped > 0 {
+		logf("图标导入：已丢弃 %d 条非图片或超限的条目", dropped)
+	}
 	f.Icons = clean
-	data, err := json.Marshal(f)
-	if err != nil {
-		return 0, err
-	}
-	if err := os.MkdirAll(filepath.Dir(t.path), 0o755); err != nil {
-		return 0, err
-	}
-	if err := os.WriteFile(t.path, data, 0o644); err != nil {
+	if err := writeJSONAtomic(t.path, f, 0o644); err != nil {
 		return 0, err
 	}
 	t.mu.Lock()
@@ -260,12 +262,6 @@ func (t *PTIconTable) Save() error {
 	t.mu.RUnlock()
 
 	f := ptIconsFile{Version: time.Now().Format("2006-01-02 15:04"), Source: "MoviePilot 自动同步 + 手工补充", Icons: snapshot}
-	data, err := json.Marshal(f)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(t.path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(t.path, data, 0o644)
+	// 与其他配置文件一致走原子写：中途写坏会让整张图标表回退到内置表。
+	return writeJSONAtomic(t.path, f, 0o644)
 }

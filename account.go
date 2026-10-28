@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -140,6 +141,8 @@ type SessionStore struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
 	created  int
+	// anonCount 增量维护匿名会话数量：否则每次创建都要全表扫一遍统计。
+	anonCount int
 }
 
 func NewSessionStore() *SessionStore {
@@ -171,7 +174,10 @@ func (s *SessionStore) Create(username string) (id string, sess *Session) {
 		s.evictLocked(now)
 	}
 	s.sessions[id] = sess
-	s.trimAnonLocked(now)
+	if username == "" {
+		s.anonCount++
+	}
+	s.trimAnonLocked()
 	return id, sess
 }
 
@@ -179,7 +185,7 @@ func (s *SessionStore) Create(username string) (id string, sess *Session) {
 func (s *SessionStore) evictLocked(now time.Time) {
 	for id, sess := range s.sessions {
 		if !sess.ExpiresAt.IsZero() && now.After(sess.ExpiresAt) {
-			delete(s.sessions, id)
+			s.deleteLocked(id)
 		}
 	}
 	for len(s.sessions) >= maxSessions {
@@ -204,63 +210,73 @@ func (s *SessionStore) evictLocked(now time.Time) {
 		if oldestID == "" {
 			return
 		}
-		delete(s.sessions, oldestID)
+		s.deleteLocked(oldestID)
 	}
 }
 
 // trimAnonLocked 把匿名会话数量压回上限，且只淘汰匿名会话。
-func (s *SessionStore) trimAnonLocked(now time.Time) {
-	anon := 0
-	for _, sess := range s.sessions {
+//
+// 旧实现每次创建会话都全表扫两遍（先数、再逐个找最旧），匿名流量一上来
+// 就把全局写锁占住。现在计数增量维护，只有真的超限时才扫一次并批量淘汰。
+func (s *SessionStore) trimAnonLocked() {
+	if s.anonCount <= maxAnonSession {
+		return
+	}
+	type entry struct {
+		id   string
+		last time.Time
+	}
+	list := make([]entry, 0, s.anonCount)
+	for id, sess := range s.sessions {
 		if sess.Username == "" {
-			anon++
+			list = append(list, entry{id: id, last: sess.LastSeen})
 		}
 	}
-	for anon > maxAnonSession {
-		oldestID := ""
-		var oldest time.Time
-		for id, sess := range s.sessions {
-			if sess.Username != "" {
-				continue
-			}
-			if oldestID == "" || sess.LastSeen.Before(oldest) {
-				oldestID, oldest = id, sess.LastSeen
-			}
-		}
-		if oldestID == "" {
-			return
-		}
-		delete(s.sessions, oldestID)
-		anon--
+	s.anonCount = len(list)
+	if len(list) <= maxAnonSession {
+		return
 	}
+	sort.Slice(list, func(i, j int) bool { return list[i].last.Before(list[j].last) })
+	for i := 0; i < len(list)-maxAnonSession; i++ {
+		s.deleteLocked(list[i].id)
+	}
+}
+
+// deleteLocked 删除会话并同步匿名计数，调用方必须已持有写锁。
+func (s *SessionStore) deleteLocked(id string) {
+	sess, ok := s.sessions[id]
+	if !ok {
+		return
+	}
+	if sess.Username == "" {
+		s.anonCount--
+	}
+	delete(s.sessions, id)
 }
 
 func (s *SessionStore) Get(id string) (*Session, bool) {
 	if id == "" {
 		return nil, false
 	}
-	s.mu.RLock()
+	// 一次写锁搞定：旧实现先 RLock 判存在、再 Lock 更新 LastSeen，每个请求两次加锁，
+	// 中间还有个窗口会让并发的 Delete 失效。
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	sess, ok := s.sessions[id]
-	s.mu.RUnlock()
 	if !ok {
 		return nil, false
 	}
 	now := time.Now()
 	if !sess.ExpiresAt.IsZero() && now.After(sess.ExpiresAt) {
-		s.Delete(id)
+		s.deleteLocked(id)
 		return nil, false
 	}
-	s.mu.Lock()
-	if cur, exists := s.sessions[id]; exists {
-		cur.LastSeen = now
-		sess = cur
-	}
-	s.mu.Unlock()
+	sess.LastSeen = now
 	return sess, true
 }
 
 func (s *SessionStore) Delete(id string) {
 	s.mu.Lock()
-	delete(s.sessions, id)
+	s.deleteLocked(id)
 	s.mu.Unlock()
 }

@@ -484,21 +484,6 @@ func (b *Browser) clearCookiesForHost(ctx context.Context, host string) error {
 	}))
 }
 
-// deleteCookie 按 name+domain 删除同名 Cookie，避免新旧值冲突。
-func (b *Browser) deleteCookie(ctx context.Context, ck Cookie) error {
-	return b.do(ctx, 15*time.Second, chromedp.Func(func(c context.Context, t *chromedp.Target) error {
-		params := network.DeleteCookiesParams{
-			Name: ck.Name,
-			Path: defaultString(ck.Path, "/"),
-		}
-		if d := strings.TrimSpace(ck.Domain); d != "" {
-			params.Domain = d
-		}
-		_, err := cdp.Call(c, t, network.DeleteCookies, params)
-		return err
-	}))
-}
-
 // cookieNamesForURL 返回当前对 url 生效的 Cookie 名（用于诊断）。
 func (b *Browser) cookieNamesForURL(ctx context.Context, url string) []string {
 	var names []string
@@ -530,21 +515,6 @@ func (b *Browser) describeCookies(ctx context.Context, url string) []string {
 		return nil
 	}))
 	return out
-}
-
-// countBrowserCookies 用 CDP 查询当前浏览器对 url 生效的 Cookie 数量（含 HttpOnly）。
-// document.cookie 读不到 HttpOnly，不能用来判断注入是否成功。
-func (b *Browser) countBrowserCookies(ctx context.Context, url string) int {
-	var n int
-	_ = b.do(ctx, 8*time.Second, chromedp.Func(func(c context.Context, t *chromedp.Target) error {
-		res, err := cdp.Call(c, t, network.GetCookies, network.GetCookiesParams{URLs: []string{url}})
-		if err != nil {
-			return err
-		}
-		n = len(res.Cookies)
-		return nil
-	}))
-	return n
 }
 
 func (b *Browser) addCookieForTarget(ctx context.Context, ck Cookie, targetURL string) error {
@@ -794,7 +764,8 @@ func isBrowserClosed(err error) bool {
 		"invalid session id",
 		"not connected to devtools",
 		"chrome failed to start",
-		"failed to unmarshal",
+		// 不要把 "failed to unmarshal" 算进来：那是 CDP 消息解析失败，
+		// 属于单次调用出错，误判成「浏览器已关闭」会中断整轮巡检并关掉浏览器。
 	} {
 		if strings.Contains(msg, needle) {
 			return true
