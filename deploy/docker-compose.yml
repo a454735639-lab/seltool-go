@@ -25,6 +25,11 @@ services:
       HOME: /tmp
       # 浏览器出口代理，留空 = 直连。见 .env.example 的说明。
       SELTOOL_PROXY: ${SELTOOL_PROXY:-}
+      # 可信反向代理白名单（IP/CIDR，逗号分隔）。只有来自这些地址的请求
+      # 才会采信 X-Forwarded-For / X-Forwarded-Proto。
+      # 反代跑在宿主机上时留空即可（回环始终可信）；反代也在容器里时，
+      # 源地址是 172.x，必须把该网段填进来，否则所有客户端会共用一个限速计数。
+      SELTOOL_TRUSTED_PROXIES: ${SELTOOL_TRUSTED_PROXIES:-}
     volumes:
       - ./config:/app/config
       - ./data:/app/data

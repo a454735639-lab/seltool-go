@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.0.12 (2026-10-28)
+
+### 升级注意
+
+- **反代需要显式配置可信网段**：登录限速不再无条件采信 `X-Forwarded-For`。若 nginx / 反代跑在容器里，请设置 `SELTOOL_TRUSTED_PROXIES=172.17.0.0/16`（或实际网段）；反代在宿主机上则无需改动。漏配时启动日志会提示一次，表现为「所有请求都算作反代自身 IP」，不会静默降级成不安全状态。
+
+### 修复
+
+- **批量导入同域多路径时 panic（`index out of range`）**：`mergeTargetsOverwrite` 给新目标记录 host 下标时写的是 `len(existing)+len(added)`（新表下标），却拿它去索引旧表 `existing`。粘贴两条同域不同路径的 URL（如 `https://hdtime.org/` + `https://hdtime.org/attendance.php`）并勾选「重复时覆盖名称」，第二个 URL 就会命中该下标直接越界。现在新增项单独记 `addedIdx`，同主机只保留一条。回归测试 `TestMergeTargetsOverwriteSameHostKeepsOne`。
+- **`maxTargets` 上限从未生效，且报错序号恒为「第 1 个」**：`saveLocked` 对每个目标单独调 `validateTargets([]Target{t})`，切片长度恒为 1，`len(targets) > maxTargets` 永远为假；`i` 也恒为 0。改为先 `checkTargetCount(len(replacement))` 判总量，再用 `validateTargetsAt(..., i)` 带上真实下标。回归测试 `TestSaveRejectsOverLimitTargets`、`TestSaveReportsRealTargetIndex`。
+- **登录限速的 IP 白信边界过宽（可绕过撞库硬锁）**：原来只要来源是私网就采信 `X-Forwarded-For` 最后一段。同网段机器、同 bridge 的其他容器、宿主机任意进程源地址都是私网，于是每次换一个伪造 IP 就是新 key，20 次/10 分钟的 IP 硬锁形同虚设；反过来也能伪造受害者 IP 把人锁死 15 分钟。新增 `automation.trusted-proxies` / `SELTOOL_TRUSTED_PROXIES` 白名单，**默认只信任回环**；转发链从右往左跳过可信代理取第一跳真实地址。反代在容器里时需要显式配置网段，启动日志会给出提示。回归测试 `TestClientIPIgnoresUntrustedForwardedFor`、`TestIsHTTPSBehindProxy`。
+- **企业微信「应用模式」缺 Secret 也能保存成功，但永远发不出消息**：保存接口只校验 `corpid` + `agentid`，而 `WeCom.Enabled()` 要求三者齐全，于是 `Send` 静默 return、日志里连一行都没有。现在保存时校验（留空视为沿用已存值），并在通知实际未启用时把返回文案改成「已保存，但通知尚未启用」。
+- **单行超长会突破企微 2048 字节上限**：`splitByBytes` 在 `cur.Len()==0` 时无条件写入整行，切出的块超限后接口返回 errcode，整条通知丢失。改为对超长单行按 UTF-8 边界硬切。
+- **图标导入绕过图片校验**：`PTIconTable.Replace` 只判空就落盘，而构造函数有 MIME 白名单 + 文件魔数校验。现在走同一套 `looksLikeImage`，并改用 `writeJSONAtomic`（此前是直接 `os.WriteFile`，写一半会丢整张表）。
+- **`failed to unmarshal` 被当成「浏览器已关闭」**：一次 CDP 消息解析失败会让整轮巡检中断并关掉浏览器。已从关闭特征里移除。
+- 若干清理：删除死代码 `Browser.deleteCookie` / `Browser.countBrowserCookies`；去掉 `main.go` 里建了却没人读的 `startupDone` channel；去掉 `selfcheck.go` 的 `var _ = time.Now`。
+
+### 优化
+
+- **运行记录改为防抖落盘**：`History.Record` 原来每记一个目标就把整张表序列化写盘一次，43 个目标 = 43 次全量写（近似 O(n²)）。现在合并为 500ms 一次，退出前 `Flush`。`Prune` 也走同一通道，避免与进行中的写交错。
+- **会话存储减少锁竞争**：`Session.Get` 由「RLock 再 Lock」改为单次写锁（每请求少一次加锁，也消除了并发 `Delete` 的窗口）；匿名会话数量改为增量计数，`trimAnonLocked` 只在真的超限时扫一次并批量淘汰，不再每次创建都全表扫两遍。
+- **`WeCom.accessToken` 不再持锁做网络请求**：原来换 token 时握着互斥锁等 HTTP（最长 15s），并发发通知会互相阻塞。现在用单独的 `fetchMu` 串行化换 token，其余请求命中缓存。
+- **限制并发登录尝试**：用户名维度的递增延迟是在 handler 里 `time.Sleep`，不限并发等于给了攻击者堆 goroutine 的开关。超过 8 个并发登录直接 429。
+- **跨平台可编译**：`pagecache.go`（`SYS_FADVISE64`）、`browser_helpers.go`（`syscall.Flock`）、`cmd/dropcache` 原来没有构建约束，macOS/Windows 上 `go build ./...` 直接失败。现在按平台拆分（Linux 走 fadvise / flock，Windows 用 `CreateFile` 不共享语义，其他平台空实现），行为在 Linux 上完全不变。
+- **`go.mod` 模块路径**与仓库对齐为 `github.com/a454735639-lab/seltool-go`（原为上游 Java 项目的 `linzaixian888/selenium-tool`，`go install` 会指到不存在的模块）。
+
+### 说明
+
+- 行为变化只有一处需要用户配合：**反代跑在容器里**的部署要补 `SELTOOL_TRUSTED_PROXIES`（见 README「配置」一节）。nginx 直接跑在宿主机上则无需改动。
+- 新增单元测试 5 个，均在 `regression_test.go` / `security_test.go`；未改动任何站点判定逻辑。
+
 ## 1.0.11 (2026-10-25)
 
 ### 改进

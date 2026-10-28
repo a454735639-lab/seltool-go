@@ -61,11 +61,19 @@ type RunRecord struct {
 
 const maxHistorySize = 7
 
+// historyFlushDelay 是运行记录的落盘防抖窗口。
+//
+// 旧实现每记录一个目标就把整张表序列化 + 落盘一次：43 个目标 = 43 次全量写，
+// 目标越多越接近 O(n²)，在 NAS / SD 卡上尤其难看。现在改成合并写。
+const historyFlushDelay = 500 * time.Millisecond
+
 // History 保存每个目标最近 7 条运行结果。
 type History struct {
 	mu      sync.Mutex
 	file    string
 	records map[string][]RunRecord
+	dirty   bool
+	timer   *time.Timer
 }
 
 func NewHistory(file string) *History {
@@ -104,6 +112,26 @@ func (h *History) Record(targetURL string, success bool, message string) {
 		Message:    message,
 	}}, h.records[targetURL]...)
 	h.records[targetURL] = trimRecords(list)
+	h.dirty = true
+	if h.timer == nil {
+		h.timer = time.AfterFunc(historyFlushDelay, h.Flush)
+	}
+	h.mu.Unlock()
+}
+
+// Flush 把内存中的运行记录落盘。
+// Record 有防抖，进程退出（或只跑一次任务）前需要显式调用一次，否则最后几条会丢。
+func (h *History) Flush() {
+	h.mu.Lock()
+	if h.timer != nil {
+		h.timer.Stop()
+		h.timer = nil
+	}
+	if !h.dirty {
+		h.mu.Unlock()
+		return
+	}
+	h.dirty = false
 	snapshot := make(map[string][]RunRecord, len(h.records))
 	for k, v := range h.records {
 		snapshot[k] = v
@@ -132,15 +160,10 @@ func (h *History) Prune(keep map[string]bool) int {
 		h.mu.Unlock()
 		return 0
 	}
-	snapshot := make(map[string][]RunRecord, len(h.records))
-	for k, v := range h.records {
-		snapshot[k] = v
-	}
+	// 走同一个落盘通道：否则可能和进行中的防抖写交错，把刚删掉的记录写回来。
+	h.dirty = true
 	h.mu.Unlock()
-
-	if err := writeJSONAtomic(h.file, snapshot, 0o644); err != nil {
-		logf("清理历史记录后写盘失败 %s: %v", h.file, err)
-	}
+	h.Flush()
 	return removed
 }
 

@@ -210,8 +210,12 @@ func (s *TargetStore) saveLocked(targets []Target) ([]Target, error) {
 	if dup := findDuplicateTarget(replacement, nil); dup != "" {
 		return nil, fmt.Errorf("%s", dup)
 	}
-	for _, t := range replacement {
-		if err := validateTargets([]Target{t}, s.templates); err != nil {
+	// 先判总量：逐项校验拿到的切片长度恒为 1，上限只能在这里生效。
+	if err := checkTargetCount(len(replacement)); err != nil {
+		return nil, err
+	}
+	for i, t := range replacement {
+		if err := validateTargetsAt([]Target{t}, s.templates, i); err != nil {
 			// Preserve an unchanged legacy record; never silently repair it or allow
 			// a new/edited invalid template through. This lets other targets be saved.
 			unchanged := false
@@ -272,36 +276,50 @@ const (
 	maxNameLen   = 200
 )
 
-func validateTargets(targets []Target, templates *TemplateStore) error {
-	if len(targets) > maxTargets {
-		return fmt.Errorf("目标数量超出上限（%d 个），当前 %d 个", maxTargets, len(targets))
+// checkTargetCount 校验总量。
+//
+// 逐项校验时切片长度恒为 1，把上限判断留在 validateTargetsAt 里就永远不会触发，
+// 所以调用方必须先对整张表判一次总量。
+func checkTargetCount(n int) error {
+	if n > maxTargets {
+		return fmt.Errorf("目标数量超出上限（%d 个），当前 %d 个", maxTargets, n)
+	}
+	return nil
+}
+
+// validateTargetsAt 逐项校验，offset 用于把报错序号还原成整张表里的位置。
+func validateTargetsAt(targets []Target, templates *TemplateStore, offset int) error {
+	if err := checkTargetCount(offset + len(targets)); err != nil {
+		return err
 	}
 	for i, t := range targets {
+		idx := offset + i
+		no := idx + 1
 		raw := strings.TrimSpace(t.URL)
 		if raw == "" {
-			return fmt.Errorf("第 %d 个目标缺少 URL", i+1)
+			return fmt.Errorf("第 %d 个目标缺少 URL", no)
 		}
 		if len(raw) > maxURLLength {
-			return fmt.Errorf("第 %d 个目标 URL 过长（%d 字符，上限 %d）", i+1, len(raw), maxURLLength)
+			return fmt.Errorf("第 %d 个目标 URL 过长（%d 字符，上限 %d）", no, len(raw), maxURLLength)
 		}
 		if len([]rune(t.Name)) > maxNameLen {
-			return fmt.Errorf("第 %d 个目标名称过长（上限 %d 字符）", i+1, maxNameLen)
+			return fmt.Errorf("第 %d 个目标名称过长（上限 %d 字符）", no, maxNameLen)
 		}
 		u, err := url.Parse(raw)
 		if err != nil || u.Scheme == "" || u.Host == "" {
-			return fmt.Errorf("第 %d 个目标 URL 无效: %s", i+1, raw)
+			return fmt.Errorf("第 %d 个目标 URL 无效: %s", no, raw)
 		}
 		if u.Scheme != "http" && u.Scheme != "https" {
-			return fmt.Errorf("第 %d 个目标仅支持 http/https: %s", i+1, raw)
+			return fmt.Errorf("第 %d 个目标仅支持 http/https: %s", no, raw)
 		}
 		// 普通目标也不允许空 key，否则运行时会往 localStorage 写空键。
 		for j, item := range t.LocalStorage {
 			if strings.TrimSpace(item.Key) == "" {
-				return fmt.Errorf("第 %d 个目标的 localStorage[%d] key 不能为空", i+1, j+1)
+				return fmt.Errorf("第 %d 个目标的 localStorage[%d] key 不能为空", no, j+1)
 			}
 		}
 		if strings.TrimSpace(t.TemplateID) != "" {
-			if err := validateTemplateTarget(t, templates, i); err != nil {
+			if err := validateTemplateTarget(t, templates, idx); err != nil {
 				return err
 			}
 		}

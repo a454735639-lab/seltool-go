@@ -25,6 +25,8 @@ type WeCom struct {
 	mu       sync.Mutex
 	token    string
 	expireAt time.Time
+	// fetchMu 只用来串行化「换 token」这个动作，不保护 token 本身。
+	fetchMu sync.Mutex
 }
 
 func NewWeCom(cfg WeComConfig) *WeCom {
@@ -132,11 +134,19 @@ func (w *WeCom) sendApp(title, content string) error {
 }
 
 // accessToken 带缓存；提前 5 分钟过期，避免边界失效。
+//
+// 换 token 是一次网络调用（最长 15s 超时），不能握着锁做：并发发通知时
+// 所有人都会排在后面等到超时。这里用 fetchMu 只放一个 goroutine 出去换，
+// 其余请求等它换完后直接命中缓存。
 func (w *WeCom) accessToken() (string, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.token != "" && time.Now().Before(w.expireAt) {
-		return w.token, nil
+	if tok := w.cachedToken(); tok != "" {
+		return tok, nil
+	}
+	w.fetchMu.Lock()
+	defer w.fetchMu.Unlock()
+	// 等锁期间可能已经有人换好了。
+	if tok := w.cachedToken(); tok != "" {
+		return tok, nil
 	}
 
 	base := strings.TrimRight(strings.TrimSpace(w.cfg.Proxy), "/")
@@ -166,7 +176,6 @@ func (w *WeCom) accessToken() (string, error) {
 		return "", fmt.Errorf("获取 access_token 失败: errcode=%d %s", out.ErrCode, out.ErrMsg)
 	}
 
-	w.token = out.AccessToken
 	ttl := time.Duration(out.ExpiresIn) * time.Second
 	if ttl <= 0 {
 		ttl = 7200 * time.Second
@@ -174,8 +183,21 @@ func (w *WeCom) accessToken() (string, error) {
 	if ttl > 5*time.Minute {
 		ttl -= 5 * time.Minute
 	}
+	w.mu.Lock()
+	w.token = out.AccessToken
 	w.expireAt = time.Now().Add(ttl)
-	return w.token, nil
+	w.mu.Unlock()
+	return out.AccessToken, nil
+}
+
+// cachedToken 返回仍在有效期内的 token，没有则返回空串。
+func (w *WeCom) cachedToken() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.token != "" && time.Now().Before(w.expireAt) {
+		return w.token
+	}
+	return ""
 }
 
 // ---- 公共 ----
@@ -252,22 +274,44 @@ func truncateBytes(s string, limit int) string {
 }
 
 // splitByBytes 按行累积切分，单块不超过 limit 字节。
+//
+// 单行本身超过上限时必须硬切：旧实现里 cur.Len()==0 会无条件写入整行，
+// 切出的块大于企微 2048 字节上限，接口返回 errcode 后整条通知直接丢失。
+// 批量失败时只要有一行超长的错误信息就会撞上这个坑。
 func splitByBytes(s string, limit int) []string {
-	if len(s) <= limit {
+	if limit <= 0 || len(s) <= limit {
 		return []string{s}
 	}
 	var out []string
 	var cur strings.Builder
-	for _, line := range strings.Split(s, "\n") {
-		line += "\n"
-		if cur.Len() > 0 && cur.Len()+len(line) > limit {
+	flush := func() {
+		if cur.Len() > 0 {
 			out = append(out, strings.TrimRight(cur.String(), "\n"))
 			cur.Reset()
 		}
+	}
+	for _, line := range strings.Split(s, "\n") {
+		line += "\n"
+		for len(line) > limit {
+			flush()
+			cut := limit
+			for cut > 0 && line[cut]&0xC0 == 0x80 { // 不切半个 UTF-8 字符
+				cut--
+			}
+			if cut == 0 {
+				cut = limit
+			}
+			out = append(out, strings.TrimRight(line[:cut], "\n"))
+			line = line[cut:]
+		}
+		if cur.Len() > 0 && cur.Len()+len(line) > limit {
+			flush()
+		}
 		cur.WriteString(line)
 	}
-	if cur.Len() > 0 {
-		out = append(out, strings.TrimRight(cur.String(), "\n"))
+	flush()
+	if len(out) == 0 {
+		return []string{s}
 	}
 	return out
 }

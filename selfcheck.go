@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"time"
 )
 
 // selfCheckResponse 是 /api/settings/selfcheck 的响应。
@@ -201,6 +200,3 @@ func readCgroupMemory() (anonMB, fileMB int64) {
 	}
 	return anonMB, fileMB
 }
-
-// 避免未使用告警（time 在后续扩展里会用到）
-var _ = time.Now

@@ -72,7 +72,8 @@ func TestF1ProfileReusedPIDIsTreatedAsStale(t *testing.T) {
 	h, _ := os.Hostname()
 	lock := filepath.Join(dir, "SingletonLock")
 	if err := os.Symlink(h+"-"+strconv.Itoa(os.Getpid()), lock); err != nil {
-		t.Fatal(err)
+		// Windows 上创建符号链接需要管理员权限或开发者模式，这不是被测逻辑的问题。
+		t.Skipf("当前环境无法创建符号链接: %v", err)
 	}
 	if isChromeProcess(os.Getpid()) {
 		t.Skip("test process looks like chrome")

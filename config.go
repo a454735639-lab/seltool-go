@@ -54,7 +54,12 @@ type AutomationConfig struct {
 	CookieCloud         CookieCloudConfig         `yaml:"cookie-cloud"`
 	StartupNotification StartupNotificationConfig `yaml:"startup-notification"`
 	Notify              NotifyConfig              `yaml:"notify"`
-	Targets             []Target                  `yaml:"targets"`
+	// TrustedProxies 是可信反向代理的 IP/CIDR 列表。只有来自这些地址的请求
+	// 才会采信 X-Forwarded-For / X-Forwarded-Proto；留空表示只信任本机回环。
+	// 反代跑在容器里时（源地址是 172.x），必须显式加上该网段，否则所有客户端
+	// 会共用同一个限速计数，也拿不到 Secure cookie。
+	TrustedProxies []string `yaml:"trusted-proxies"`
+	Targets        []Target `yaml:"targets"`
 }
 
 type ScheduleConfig struct {
@@ -241,6 +246,15 @@ func applyEnvOverrides(cfg *Config) {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 			cfg.Automation.Notify.WeCom.AgentID = n
 		}
+	}
+	if v := strings.TrimSpace(os.Getenv("SELTOOL_TRUSTED_PROXIES")); v != "" {
+		var list []string
+		for _, part := range strings.Split(v, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				list = append(list, part)
+			}
+		}
+		cfg.Automation.TrustedProxies = list
 	}
 	setStr(&cfg.Automation.Schedule.Cron, "SELTOOL_CRON")
 	setStr(&cfg.Automation.Schedule.Zone, "SELTOOL_TIMEZONE")

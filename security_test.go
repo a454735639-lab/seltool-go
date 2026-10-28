@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -137,18 +138,70 @@ func TestLooksLikeImageRejectsMimeInjection(t *testing.T) {
 }
 
 // 反代终止 TLS 时也要判定为 HTTPS，否则会话 cookie 永远不带 Secure。
+// 只有显式列入 trusted-proxies 的来源才采信转发头。
 func TestIsHTTPSBehindProxy(t *testing.T) {
+	// 默认只信任回环：容器/同网段的来源不能仅凭「私网」就采信转发头。
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "172.17.0.1:54321"
 	r.Header.Set("X-Forwarded-Proto", "https")
-	if !isHTTPS(r) {
-		t.Fatal("内网反代带 X-Forwarded-Proto=https 时应判定为 HTTPS")
+	if isHTTPS(r) {
+		t.Fatal("未列入 trusted-proxies 的私网来源不应采信 X-Forwarded-Proto")
 	}
+
+	t.Cleanup(func() { _ = setTrustedProxies(nil) })
+	if err := setTrustedProxies([]string{"172.17.0.0/16"}); err != nil {
+		t.Fatalf("配置可信代理失败: %v", err)
+	}
+	if !isHTTPS(r) {
+		t.Fatal("加入 trusted-proxies 后带 X-Forwarded-Proto=https 应判定为 HTTPS")
+	}
+	if !isHTTPS(loopbackRequest("X-Forwarded-Proto", "https")) {
+		t.Fatal("回环反代应始终可信")
+	}
+
 	// 外部直连客户端伪造该头不应生效。
 	r2 := httptest.NewRequest("GET", "/", nil)
 	r2.RemoteAddr = "203.0.113.9:443"
 	r2.Header.Set("X-Forwarded-Proto", "https")
 	if isHTTPS(r2) {
 		t.Fatal("公网直连伪造 X-Forwarded-Proto 不应被采信")
+	}
+}
+
+func loopbackRequest(header, value string) *http.Request {
+	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "127.0.0.1:54321"
+	r.Header.Set(header, value)
+	return r
+}
+
+// 限速依赖 clientIP：不可信来源必须按 TCP 对端计，否则每次换个
+// X-Forwarded-For 就是新 key，20 次/10 分钟的 IP 硬锁形同虚设。
+func TestClientIPIgnoresUntrustedForwardedFor(t *testing.T) {
+	t.Cleanup(func() { _ = setTrustedProxies(nil) })
+
+	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "192.168.1.50:1234"
+	r.Header.Set("X-Forwarded-For", "1.1.1.1")
+	if got := clientIP(r); got != "192.168.1.50" {
+		t.Fatalf("不可信私网来源应返回对端地址，实际 %q", got)
+	}
+
+	r.Header.Set("X-Forwarded-For", "2.2.2.2")
+	if got := clientIP(r); got != "192.168.1.50" {
+		t.Fatalf("伪造第二个地址也不应生效，实际 %q", got)
+	}
+
+	if err := setTrustedProxies([]string{"192.168.1.0/24"}); err != nil {
+		t.Fatalf("配置可信代理失败: %v", err)
+	}
+	r.Header.Set("X-Forwarded-For", "6.6.6.6, 203.0.113.7")
+	if got := clientIP(r); got != "203.0.113.7" {
+		t.Fatalf("应取最靠近服务端的一跳，实际 %q", got)
+	}
+	// 右侧一跳本身也是可信代理时继续往左找。
+	r.Header.Set("X-Forwarded-For", "203.0.113.7, 192.168.1.9")
+	if got := clientIP(r); got != "203.0.113.7" {
+		t.Fatalf("应跳过可信代理跳到真实客户端，实际 %q", got)
 	}
 }

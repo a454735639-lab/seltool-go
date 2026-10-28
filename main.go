@@ -49,6 +49,9 @@ func run() error {
 		notifyStartup(webhook, cfg.Automation.StartupNotification, alerts, err)
 		return err
 	}
+	if err := setTrustedProxies(cfg.Automation.TrustedProxies); err != nil {
+		return fail(err)
+	}
 	if cfg.Automation.Browser.DriverPath != "" {
 		log.Printf("browser.driver-path在CDP版本无需使用；已忽略，不会下载chromedriver")
 	}
@@ -67,6 +70,7 @@ func run() error {
 	}
 	history := NewHistory(cfg.Automation.TargetHistoryFile)
 	history.Load()
+	defer history.Flush() // Record 有防抖，退出前把最后一批记录落盘
 	settings := NewSettingsStore("./config/cookiecloud-settings.json")
 	if saved, ok, err := settings.Load(); err != nil {
 		return fail(err)
@@ -218,10 +222,8 @@ func run() error {
 		defer syncScheduler.Stop()
 		log.Printf("CookieCloud 每日同步已注册: %s", syncCron)
 	}
-	startupDone := make(chan struct{})
 	go func() {
 		defer recoverAndLog("启动任务")
-		defer close(startupDone)
 		var startupErr error
 		if cfg.Automation.RunOnStartup {
 			automation.ExecuteOnce("启动执行")
