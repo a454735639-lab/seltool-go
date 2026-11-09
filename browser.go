@@ -649,6 +649,18 @@ func (b *Browser) checkStatus(ctx context.Context, target Target) (bool, string)
 			} else if hit {
 				return false, "登录状态检查失败（页面有可见的密码输入框）"
 			}
+			// 通用正信号：页面上有**可见的**退出/登出入口，或常见的「已登录」容器。
+			// 好学（hxpt.org）这类站登录后标题是中性的（「好学 · PT」），既不含
+			// failTitles 也不含 successTitles，旧逻辑只能空转到 25s 超时后报假失败。
+			// 放在密码框之后：明确的登录表单优先判为未登录。
+			if time.Now().After(settle) {
+				if hit, err := b.loggedInMarker(ctx); err != nil {
+					logf("目标 [%s] 已登录标记检测出错: %v", target.DisplayName(), err)
+				} else if hit != "" {
+					logf("目标 [%s] 命中已登录标记 %s", target.DisplayName(), hit)
+					return true, ""
+				}
+			}
 			if title != "" {
 				// 失败关键字（登录/登錄/2fa）是强信号，立即判
 				if containsAny(title, failTitles...) {
@@ -681,6 +693,51 @@ func (b *Browser) checkStatus(ctx context.Context, target Target) (bool, string)
 		}
 	}
 }
+
+// loggedInMarker 返回命中的「已登录」标记名，未命中返回空串。
+//
+// 用于标题既不含 failTitles 也不含 successTitles 的站点（如好学 hxpt.org，
+// 登录前后标题都是「好学 · PT」）。这类站过去只能等 25s 超时后报假失败。
+//
+// 判定全部基于**可见**元素：很多站把「退出登录」文案塞在页面内联的 i18n
+// 字典里（未登录时同样存在），按字符串匹配会大面积误判。所以只认 DOM 结构，
+// 且要求元素有实际布局尺寸。
+func (b *Browser) loggedInMarker(ctx context.Context) (string, error) {
+	return runValue(ctx, 8*time.Second, chromedp.Evaluate[string](loggedInMarkerScript))
+}
+
+// loggedInMarkerScript 是 loggedInMarker 求值的 JS，抽成包级变量便于测试校验。
+const loggedInMarkerScript = `(() => {
+		const visible = (el) => {
+			if (!el) return false;
+			const r = el.getBoundingClientRect();
+			if (r.width <= 0 || r.height <= 0) return false;
+			const s = getComputedStyle(el);
+			if (s.visibility === 'hidden' || s.display === 'none' || s.opacity === '0') return false;
+			return true;
+		};
+		// 1) 明确的登出链接：href 含 logout / signout / 退出
+		const out = document.querySelectorAll('a[href]');
+		for (const a of out) {
+			const href = (a.getAttribute('href') || '').toLowerCase();
+			if (!/logout|log-out|signout|sign-out|登出|退出/.test(href)) continue;
+			if (visible(a)) return 'a[href*=logout]';
+		}
+		// 2) 用户菜单容器（好学用的是 .usermenu，NexusPHP 系常见 usercp 链接）
+		const menus = ['.usermenu', '.user-menu', '.userinfo', '.user-info', '#usermenu', '#userinfo'];
+		for (const sel of menus) {
+			for (const el of document.querySelectorAll(sel)) {
+				if (visible(el)) return sel;
+			}
+		}
+		// 3) 个人中心链接：NexusPHP 的 usercp.php，或 /userdetails/<数字>
+		for (const a of out) {
+			const href = (a.getAttribute('href') || '').toLowerCase();
+			if (!/usercp\.php|userdetails\/\d+/.test(href)) continue;
+			if (visible(a)) return 'a[href*=userdetails]';
+		}
+		return '';
+	})()`
 
 // visiblePasswordInput 判断页面上是否存在**可见的**密码输入框。
 //

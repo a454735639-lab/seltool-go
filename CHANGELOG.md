@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.13 (2026-11-09)
+
+### 修复
+
+- **登录后标题中性的站点被误判为「等待页面加载超时」**：`checkStatus` 的标题判定只有两张表 —— `failTitles`（登录/登錄/2fa/Login）和 `successTitles`（首页/首頁）。像好学（`www.hxpt.org`）这种登录前后标题都是「好学 · PT」的站，两张表都不命中，于是每 700ms 轮询一次、空转到 25 秒 deadline 才报失败，日志表现为「页面导航耗时 5.5s」之后隔 26 秒才失败。实测该站 Cookie 完全有效（带 Cookie 直接 curl 返回 200 且含「退出」），纯属判定逻辑空洞。
+  - 新增 `loggedInMarker`：在密码框检测之后、标题关键字之前，检查页面上**可见的**已登录标记 —— 登出链接（`href` 含 logout/signout/退出）、用户菜单容器（`.usermenu` / `.user-menu` / `.userinfo` 等）、个人中心链接（`usercp.php` / `userdetails/<数字>`）。
+  - 全部基于 DOM 结构 + `getBoundingClientRect()` 可见性判断，**不做文案字符串匹配**。原因：很多站把「退出登录」写进页面内联的 i18n 字典，未登录时字符串同样存在（好学未登录页里「退出」出现 9 次），按文案匹配会大面积误判成已登录。
+  - 放在密码框之后：明确的登录表单（可见密码框）优先判为未登录。
+  - 实测效果：好学从「26 秒超时失败」变为「3 秒判定成功」。
+  - 回归测试 `TestLoggedInMarkerScript`（校验脚本关键选择器不丢失）、`TestNeutralTitleWouldPreviouslyTimeout`（锁住中性标题这一判定空洞）、`TestFailSuccessTitlesDoNotOverlap`。
+
+### 说明
+
+- 本次不含破坏性变更。已配置 `okSelector` / `failSelector` 的目标行为不变（那两个字段仍然优先于通用判定）。
+- 若某站误报「已登录」，给该目标配 `failSelector`（如 `input[type=password]`）即可覆盖通用逻辑。
+
 ## 1.0.12 (2026-10-28)
 
 ### 升级注意

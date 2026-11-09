@@ -127,7 +127,7 @@ SELTOOL_COOKIECLOUD_SYNC_CRON=0 0 4 * * *
 | `HOST_VNC_PORT` | noVNC 端口，默认 7900（只绑 127.0.0.1） |
 | `SE_VNC_PASSWORD` | VNC 密码，**必改** |
 | `VNCPROXY_ALLOWED_HOSTS` | noVNC 允许的 Host，反代时加域名 |
-| `NO_PROXY` | 代理排除列表 |
+| `NO_PROXY` | 代理排除列表，**只影响程序自身的 HTTP 请求**（CookieCloud / MoviePilot 同步），对浏览器无效，见下文 |
 | `SELTOOL_COOKIECLOUD_SYNC_CRON` | CookieCloud 每日同步时间，默认 `0 0 4 * * *` |
 | `SELTOOL_TRUSTED_PROXIES` | 可信反代 IP/CIDR，逗号分隔；留空 = 只信任回环 |
 
@@ -177,11 +177,21 @@ SELTOOL_COOKIECLOUD_SYNC_CRON=0 0 4 * * *
 
 ### 目标直连（`noProxy`，站点被代理出口拦截时用）
 
-浏览器代理是**全局**的（`notify-settings.json` 的 `proxy`）。如果某个站在直连时正常、走代理时整页打不开，表现为「403 / 等待页面加载超时」，就在该目标上勾选「直连」：
+浏览器代理是**全局**的（`SELTOOL_PROXY` / `browser.proxy`）。如果某个站在直连时正常、走代理时整页打不开，表现为「403 / 等待页面加载超时」，就在该目标上勾选「直连」：
 
 - 直连模式**不注入**全局代理，并使用独立的 profile 目录 `<userDataDir>-direct`（避免 Chromium 的 profile 单实例锁）。
 - 浏览器实例按 `proxy` / `direct` 两种模式缓存，批量执行时每个目标各取所需，只有首次切到某模式时才新建实例。
 - 直连意味着该站看到的是你本地出口 IP。PT 站若对 IP 变化敏感，开之前先确认站点规则。
+- 日志会明确打出模式：`目标直连模式：本次浏览器不使用代理（profile=./data/chrome-profile-direct）` 与 `已创建新的浏览器会话（模式：direct）`。
+
+> ⚠️ **`NO_PROXY` 环境变量管不到浏览器。** 容器级 `NO_PROXY` 只对程序自己发起的
+> HTTP 请求生效（CookieCloud 拉取、MoviePilot 同步）；Chromium 的代理是启动参数
+> `--proxy-server` 决定的，而本程序不生成 `--proxy-bypass-list`。
+> 实测：把某域名加进 `NO_PROXY` 后，该目标的日志仍是「模式：proxy」。
+> **要按站点分流，只能逐个目标勾「直连」（`noProxy: true`）。**
+
+> 另一个易踩的坑：被污染域名的站点（如 `pt.gtkpw.xyz` 解析到 `93.46.8.90`）直连会
+> 直接 `Connection reset by peer`，这类站**必须**走代理，不要勾直连。
 
 ### 站点换域名 / 一个站多个域名
 
