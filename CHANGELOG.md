@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.14 (2026-11-10)
+
+### 修复
+
+- **导入时 apex 与 www 被当成两个站同时入库，保存阶段又被判为同一站点整批拒绝**：CookieCloud 里同时存在 `hdupt.com` 与 `www.hdupt.com` 的记录时（常见于 cookie 落在裸域、localStorage 落在 www 域），「导入目标站点」会列出两条候选；而查站点名表时两者都会剥掉 www，于是显示成同一个名字（例如都是「高校」），用户根本分不清该取消勾选哪一条。合并阶段只按 host 判重，两条双双入库；保存校验 `findDuplicateTarget` 按注册域名判重，判定为同一站点，整批拒绝，报错形如「高校 与 高校 是同一站点（hdupt.com）」。
+  - `mergeTargetsOverwrite` 新增 `addedRegIdx`：**本轮新增**的条目也按注册域名登记，同批里 apex 与 www 互换时按「重复」处理（勾选覆盖时只改显示名，不动 URL）。
+  - `mergeTargets`（CookieCloud 定时自动导入走的路径）补上同一层判重，与保存校验口径对齐。
+  - 面板候选列表新增 `dedupeCandidates`：同一注册域名只输出一条候选。保留哪条按「凭据更全（both > cookie > localStorage）→ 优先不带 www 的 apex」——cookie 与 localStorage 注入都按父域逐级匹配（`buildAllowedDomains`），apex 目标能拿到 www 名下的凭据，反过来拿不到。
+  - 回归测试：`TestMergeTargetsOverwriteApexAndWWWKeepsOne`、`TestMergeTargetsApexAndWWWKeepsOne`、`TestMergeTargetsSkipsWWWWhenApexExists`、`TestDedupeCandidatesMergesApexAndWWW`、`TestDedupeCandidatesKeepsCredentialHost`、`TestDedupeCandidatesMergesSourceAndExists`、`TestDedupeCandidatesKeepsDistinctSites`。
+
+### 说明
+
+- 本次不含破坏性变更，已配置的目标不会被自动改动。
+- 只保证**新导入**不再产生重复数据。如果你的目标列表里**已经**存在两条同注册域名的条目（例如同时有 `hdupt.com` 和 `www.hdupt.com`），任何一次保存仍会被校验拒绝，需要手动删掉其中一条（建议保留 CookieCloud 里凭据所在的那个域名）。
+- 同主机不同路径**仍然不允许**重复，行为与之前一致。
+
 ## 1.0.13 (2026-11-09)
 
 ### 修复
