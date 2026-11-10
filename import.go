@@ -150,13 +150,63 @@ var specialSiteDomains = []string{
 	"pt.gtk.pw",
 }
 
+// multiPartSuffixes 收集常见的二级公共后缀（.com.cn / .co.uk 这类）。
+//
+// 不内嵌完整 PSL：PT 站基本只用 .com/.me/.cc 这种单段后缀，这里只兜住
+// 「注册者买到的是三段域名」的常见情形。漏收录的后果是退化成「取最后两段」，
+// 即 a.com.cn 与 b.com.cn 可能被判成同一站（不会把同一站拆成两条）。
+var multiPartSuffixes = map[string]bool{
+	// 中国及港澳台
+	"com.cn": true, "net.cn": true, "org.cn": true, "gov.cn": true,
+	"edu.cn": true, "ac.cn": true,
+	"com.hk": true, "net.hk": true, "org.hk": true, "edu.hk": true, "gov.hk": true,
+	"com.tw": true, "net.tw": true, "org.tw": true, "edu.tw": true, "idv.tw": true,
+	"com.mo": true, "net.mo": true, "org.mo": true, "edu.mo": true,
+	// 亚太
+	"co.jp": true, "ne.jp": true, "or.jp": true, "ac.jp": true, "go.jp": true,
+	"co.kr": true, "or.kr": true, "ne.kr": true,
+	"com.sg": true, "net.sg": true, "org.sg": true, "edu.sg": true,
+	"com.my": true, "net.my": true, "org.my": true,
+	"co.th": true, "in.th": true, "or.th": true, "ac.th": true,
+	"com.vn": true, "net.vn": true, "org.vn": true, "edu.vn": true,
+	"com.ph": true, "net.ph": true, "org.ph": true,
+	"co.id": true, "or.id": true, "web.id": true, "ac.id": true, "sch.id": true,
+	"com.pk": true, "net.pk": true, "org.pk": true,
+	"com.bd": true, "com.np": true, "com.lk": true,
+	// 欧洲
+	"co.uk": true, "org.uk": true, "me.uk": true, "ac.uk": true,
+	"gov.uk": true, "net.uk": true, "ltd.uk": true, "plc.uk": true,
+	"com.ru": true, "net.ru": true, "org.ru": true, "msk.ru": true, "spb.ru": true,
+	"com.ua": true, "net.ua": true, "org.ua": true, "kiev.ua": true, "pp.ua": true,
+	"com.pl": true, "net.pl": true, "org.pl": true,
+	"com.tr": true, "net.tr": true, "org.tr": true, "gen.tr": true, "web.tr": true,
+	"com.gr": true, "net.gr": true, "org.gr": true, "edu.gr": true,
+	// 美洲与非洲
+	"com.br": true, "net.br": true, "org.br": true, "art.br": true,
+	"com.mx": true, "net.mx": true, "org.mx": true,
+	"com.ar": true, "net.ar": true, "org.ar": true,
+	"com.co": true, "net.co": true, "org.co": true,
+	"com.pe": true, "net.pe": true, "org.pe": true,
+	"com.ve": true, "com.ec": true, "com.uy": true, "com.py": true,
+	"co.za": true, "org.za": true, "net.za": true,
+	"co.ke": true, "co.tz": true, "com.ng": true, "com.gh": true, "com.eg": true,
+	"co.il": true, "org.il": true, "net.il": true, "ac.il": true,
+	"com.sa": true, "net.sa": true, "org.sa": true,
+	"com.ae": true, "net.ae": true, "org.ae": true, "ac.ae": true,
+}
+
 // registeredDomain 提取用于站点去重的注册域名。
 //
-// 规则对齐 MoviePilot 的 extract_domain：
+// 规则对齐 MoviePilot 的 extract_domain，并补上二级公共后缀：
 //  1. 命中特例白名单 → 原样返回
-//  2. 去掉 Cookie 域常见的前导点（.hddolby.com → hddolby.com）
-//  3. 标签数 > 3 → 原样保留（子域站点各自独立）
-//  4. 否则取最后两段（www.hddolby.com → hddolby.com）
+//  2. 去掉 Cookie 域常见的前导点、以及 FQDN 尾点（.hddolby.com → hddolby.com）
+//  3. 末两段是二级公共后缀（.com.cn/.co.uk）→ 取「后缀 + 1」段
+//  4. 普通后缀且标签数 > 3 → 原样保留（子域站点各自独立）
+//  5. 其余取最后两段（www.hddolby.com → hddolby.com）
+//
+// 第 3 条不能省：example.com.cn 只有三段，按第 5 条会被算成 com.cn，
+// 于是 a.com.cn 与 b.com.cn 两个毫不相干的站反而被判成同一站；而
+// www.example.com.cn 有四段，按第 4 条又原样保留，和 apex 对不上。
 //
 // 这样 www 与 apex 会归到同一个注册域名，从根源上杜绝重复目标。
 func registeredDomain(raw string) string {
@@ -180,6 +230,7 @@ func registeredDomain(raw string) string {
 	}
 	v = strings.Trim(v, "[]")
 	v = strings.TrimPrefix(v, ".")
+	v = strings.TrimSuffix(v, ".")
 	if v == "" {
 		return ""
 	}
@@ -189,10 +240,24 @@ func registeredDomain(raw string) string {
 		}
 	}
 	labels := strings.Split(v, ".")
-	if len(labels) > 3 {
+	if len(labels) < 2 {
 		return v
 	}
-	if len(labels) < 2 {
+	// 公共后缀占几段：默认 1 段（.com/.me/.cc），命中二级公共后缀则 2 段（.com.cn/.co.uk）
+	suffixLen := 1
+	if len(labels) >= 3 && multiPartSuffixes[strings.Join(labels[len(labels)-2:], ".")] {
+		suffixLen = 2
+	}
+	need := suffixLen + 1
+	if len(labels) <= need {
+		return v
+	}
+	if suffixLen == 2 {
+		// 二级公共后缀下多段子域也收敛回注册域名，
+		// 否则 www.example.com.cn 与 example.com.cn 无法归并成同一站。
+		return strings.Join(labels[len(labels)-need:], ".")
+	}
+	if len(labels) > 3 {
 		return v
 	}
 	return strings.Join(labels[len(labels)-2:], ".")

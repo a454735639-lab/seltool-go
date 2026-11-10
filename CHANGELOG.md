@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.15 (2026-11-10)
+
+### 修复
+
+- **二级公共后缀下的站点被错误归并 / 无法归并**：`registeredDomain` 原规则是「标签数 > 3 原样保留，否则取最后两段」，对 `.com.cn`、`.co.uk` 这类二级公共后缀是错的，两个方向都会出问题：
+  - `a.com.cn` 与 `b.com.cn` 都只有三段，双双被算成 `com.cn` —— 两个毫不相干的站被判成「同一站点」，保存时被整批拒绝。
+  - `www.example.com.cn` 是四段，按「原样保留」又和 `example.com.cn` 对不上，apex/www 无法归并。
+
+  新增 `multiPartSuffixes` 表（`.com.cn` / `.co.uk` / `com.hk` / `co.jp` / `com.br` / `pp.ua` 等常见二级公共后缀），命中时按「后缀 + 1 段」取注册域名：`www.example.com.cn`、`a.b.example.com.cn` 均收敛为 `example.com.cn`，而 `a.com.cn` 与 `b.com.cn` 保持独立。
+  - 另修 FQDN 尾点：`example.com.` 之前会取成 `com.`，现在先剥掉尾点再计算。
+  - 未收录的后缀会退化成「取最后两段」，最坏结果是两个三段域名被判成同一站，不会把同一站拆成两条。
+  - 回归测试：`TestF1RegisteredDomainMultiPartSuffix`、`TestF1MultiPartSuffixSitesNotDuplicate`。
+
+### 说明
+
+- 不需要改动任何配置，也不影响已有目标。
+- 仍只保证**新导入**不产生重复。目标列表里已有的两条同注册域名条目不会被自动清理，保存时仍会被校验拒绝，需手动删一条。
+
 ## 1.0.14 (2026-11-10)
 
 ### 修复
