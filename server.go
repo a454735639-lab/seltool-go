@@ -552,6 +552,65 @@ func (s *Server) handleSaveCookieCloud(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// siteCandidate 是「导入目标站点」列表里的一条候选。
+type siteCandidate struct {
+	Domain string `json:"domain"`
+	Name   string `json:"name"`
+	Exists bool   `json:"exists"`
+	Source string `json:"source"` // cookie / localStorage / both
+}
+
+// dedupeCandidates 把同一注册域名的候选合并成一条。
+//
+// www.hdupt.com 与 hdupt.com 会各自成为候选，但查站点名表时都会剥掉 www，
+// 两条显示名完全一样（例如都叫「高校」），面板上用户无从判断该取消哪一个。
+// 全勾选导入后，保存校验（findDuplicateTarget）按注册域名查重会把整批拒绝，
+// 报错形如「高校 与 高校 是同一站点（hdupt.com）」。
+//
+// 保留哪条：先看凭据是否更全（both > cookie > localStorage）；凭据相同时
+// 优先不带 www 的 apex —— cookie 与 localStorage 注入都按父域逐级匹配
+// （buildAllowedDomains），apex 目标能拿到 www 名下的凭据，反过来拿不到。
+func dedupeCandidates(list []siteCandidate) []siteCandidate {
+	if len(list) < 2 {
+		return list
+	}
+	sourceRank := map[string]int{"both": 3, "cookie": 2, "localStorage": 1, "": 0}
+	merged := make([]siteCandidate, 0, len(list))
+	byReg := make(map[string]int, len(list))
+	for _, cur := range list {
+		reg := registeredDomain(cur.Domain)
+		if reg == "" {
+			reg = cur.Domain
+		}
+		i, ok := byReg[reg]
+		if !ok {
+			byReg[reg] = len(merged)
+			merged = append(merged, cur)
+			continue
+		}
+		prev := merged[i]
+		merged[i].Exists = prev.Exists || cur.Exists
+		switch {
+		case prev.Source == cur.Source, cur.Source == "":
+			// 无需改动
+		case prev.Source == "":
+			merged[i].Source = cur.Source
+		default:
+			// 一条有 cookie、一条有 localStorage：合并后两种凭据都可用。
+			merged[i].Source = "both"
+		}
+		better := sourceRank[cur.Source] > sourceRank[prev.Source]
+		if sourceRank[cur.Source] == sourceRank[prev.Source] {
+			better = strings.HasPrefix(prev.Domain, "www.") && !strings.HasPrefix(cur.Domain, "www.")
+		}
+		if better {
+			merged[i].Domain = cur.Domain
+			merged[i].Name = cur.Name
+		}
+	}
+	return merged
+}
+
 // handleCandidates 预览从 CookieCloud 识别到的 PT 站，不落盘。
 func (s *Server) handleCandidates(w http.ResponseWriter, r *http.Request) {
 	data, lsData, err := s.cookies.FetchAll()
@@ -571,12 +630,6 @@ func (s *Server) handleCandidates(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	type candidate struct {
-		Domain string `json:"domain"`
-		Name   string `json:"name"`
-		Exists bool   `json:"exists"`
-		Source string `json:"source"` // cookie / localStorage / both
-	}
 	// 统计每个归一化域名带哪些凭据，前端可据此提示「该站靠 localStorage 登录」
 	cookieDom := map[string]bool{}
 	for raw, list := range data {
@@ -590,13 +643,11 @@ func (s *Server) handleCandidates(w http.ResponseWriter, r *http.Request) {
 			lsDom[normalizeDomain(raw)] = true
 		}
 	}
-	list := make([]candidate, 0, len(domains))
-	fresh := 0
+	list := make([]siteCandidate, 0, len(domains))
 	for _, d := range domains {
 		host := normalizeDomain(d)
-		exists := seenReg[registeredDomain(host)]
-		if !exists {
-			fresh++
+		if host == "" {
+			continue
 		}
 		source := ""
 		switch {
@@ -607,7 +658,21 @@ func (s *Server) handleCandidates(w http.ResponseWriter, r *http.Request) {
 		case cookieDom[host]:
 			source = "cookie"
 		}
-		list = append(list, candidate{Domain: host, Name: siteDisplayName(host), Exists: exists, Source: source})
+		list = append(list, siteCandidate{
+			Domain: host,
+			Name:   siteDisplayName(host),
+			Exists: seenReg[registeredDomain(host)],
+			Source: source,
+		})
+	}
+	// apex 与 www 会各自成为候选，这里按注册域名合并成一条，
+	// 否则面板上会出现两个同名站点、勾选后保存又被整批拒绝。
+	list = dedupeCandidates(list)
+	fresh := 0
+	for _, c := range list {
+		if !c.Exists {
+			fresh++
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"candidates": list,
@@ -690,12 +755,6 @@ func (s *Server) handleImportTargets(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// mergeTargets 按规范化 URL 合并，跳过已存在的站点。
-//
-// 去重键用 canonicalURLKey（host + 路径，忽略末尾斜杠），并额外按 host 精确匹配，
-// 这样「同一站带不带末尾斜杠」「导入两次」都不会产生重复。
-// 注意 www 与 apex 仍视为不同 host —— 两者 Cookie 域不同，合并会丢登录态。
-
 // targetsFromDomains 把域名列表直接转成目标（不做去重，交给合并阶段处理）。
 func targetsFromDomains(domains []string) []Target {
 	out := make([]Target, 0, len(domains))
@@ -717,6 +776,10 @@ func targetsFromDomains(domains []string) []Target {
 // mergeTargetsOverwrite 在 mergeTargets 基础上支持「重复时覆盖」。
 // 覆盖只更新显示名，不改 URL —— 已有目标可能带签到路径（如 /attendance.php），
 // 改 URL 会把用户配好的路径冲掉。
+//
+// 判重分三层：规范化 URL → host → 注册域名，且「已有目标」和「本轮新增」
+// 两套索引都要查。少了 addedRegIdx 这一层，同批里的 hdupt.com 与
+// www.hdupt.com 会双双入库，保存时被 findDuplicateTarget 整批拒绝。
 func mergeTargetsOverwrite(incoming, existing []Target, overwrite bool) (added []Target, updated, skipped int) {
 	seenKey := map[string]bool{}
 	regIdx := map[string]int{}
@@ -725,6 +788,12 @@ func mergeTargetsOverwrite(incoming, existing []Target, overwrite bool) (added [
 	// 不能复用 hostIdx：它的值是 existing 的下标，拿它去索引一个还没落库的
 	// 新目标会直接越界 panic（同域不同路径的第二次导入就会触发）。
 	addedIdx := map[string]int{}
+	// addedRegIdx 记录本轮新增项按注册域名的下标。
+	// 只按 host 去重会漏掉 apex 与 www 的关系：同一批里同时有 hdupt.com 与
+	// www.hdupt.com 时两者 host 不同，会一起进表，随后被保存校验
+	// （findDuplicateTarget 按注册域名查重）整批拒绝，用户看到的是
+	// 「高校 与 高校 是同一站点（hdupt.com）」，却找不到该取消勾选哪一个。
+	addedRegIdx := map[string]int{}
 	for i, t := range existing {
 		raw := strings.TrimSpace(t.URL)
 		if raw == "" {
@@ -795,6 +864,18 @@ func mergeTargetsOverwrite(incoming, existing []Target, overwrite bool) (added [
 			}
 			continue
 		}
+		// 同注册域名在本轮里已经新增过（apex 与 www 互换）：同样按「重复」处理，
+		// 与保存校验的口径对齐，否则这一批会被整批拒绝。
+		if reg := registeredDomain(raw); reg != "" {
+			if i, ok := addedRegIdx[reg]; ok {
+				if applyAdded(i, t) {
+					updated++
+				} else {
+					skipped++
+				}
+				continue
+			}
+		}
 		if reg := registeredDomain(raw); reg != "" {
 			if i, ok := regIdx[reg]; ok {
 				if apply(i, t) {
@@ -809,22 +890,40 @@ func mergeTargetsOverwrite(incoming, existing []Target, overwrite bool) (added [
 		if host != "" {
 			addedIdx[host] = len(added)
 		}
+		if reg := registeredDomain(raw); reg != "" {
+			addedRegIdx[reg] = len(added)
+		}
 		added = append(added, t)
 	}
 	return added, updated, skipped
 }
 
+// mergeTargets 按规范化 URL 合并，跳过已存在的站点（CookieCloud 定时自动导入走这里）。
+//
+// 去重键用 canonicalURLKey（host + 路径，忽略末尾斜杠），并额外按 host 与注册域名
+// 匹配：canonicalURLKey 管「同一站带不带末尾斜杠」，host 管「同一站不同路径」，
+// 注册域名管「apex 与 www」——三者与保存校验的口径一致，缺一层就会让
+// 整批导入在保存阶段被 findDuplicateTarget 拒绝。
+// 合并 www 与 apex 不会丢登录态：CookieCloud 的 LocalStorageFor 与 cookie 注入
+// 都按父域逐级匹配（buildAllowedDomains），apex 目标能拿到 www 名下的凭据。
 func mergeTargets(incoming, existing []Target) (added []Target, skipped int) {
 	seenKey := map[string]bool{}
 	seenHost := map[string]bool{}
-	for _, t := range existing {
-		raw := strings.TrimSpace(t.URL)
-		if raw == "" {
-			continue
-		}
+	// seenReg 与保存校验（findDuplicateTarget）同口径：apex 与 www 归同一站。
+	// 只按 host 去重会让 hdupt.com 与 www.hdupt.com 一起入库，随后整批保存被拒。
+	seenReg := map[string]bool{}
+	remember := func(raw string) {
 		seenKey[canonicalURLKey(raw)] = true
 		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
 			seenHost[strings.ToLower(u.Hostname())] = true
+		}
+		if reg := registeredDomain(raw); reg != "" {
+			seenReg[reg] = true
+		}
+	}
+	for _, t := range existing {
+		if raw := strings.TrimSpace(t.URL); raw != "" {
+			remember(raw)
 		}
 	}
 	for _, t := range incoming {
@@ -833,8 +932,7 @@ func mergeTargets(incoming, existing []Target) (added []Target, skipped int) {
 			skipped++
 			continue
 		}
-		key := canonicalURLKey(raw)
-		if seenKey[key] {
+		if seenKey[canonicalURLKey(raw)] {
 			skipped++
 			continue
 		}
@@ -846,10 +944,11 @@ func mergeTargets(incoming, existing []Target) (added []Target, skipped int) {
 			skipped++
 			continue
 		}
-		seenKey[key] = true
-		if host != "" {
-			seenHost[host] = true
+		if reg := registeredDomain(raw); reg != "" && seenReg[reg] {
+			skipped++
+			continue
 		}
+		remember(raw)
 		added = append(added, t)
 	}
 	return added, skipped

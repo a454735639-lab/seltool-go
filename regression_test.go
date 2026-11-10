@@ -94,3 +94,105 @@ func TestSplitByBytesKeepsLines(t *testing.T) {
 		t.Fatalf("未超限时不应切分: %#v", chunks)
 	}
 }
+
+// 同批导入 apex 与 www 时，两者曾双双入库：合并阶段只按 host 判重，
+// 而保存校验（findDuplicateTarget）按注册域名判重，于是整批被拒，
+// 用户看到「高校 与 高校 是同一站点（hdupt.com）」，却分不清该取消哪个。
+func TestMergeTargetsOverwriteApexAndWWWKeepsOne(t *testing.T) {
+	incoming := []Target{
+		{URL: "https://hdupt.com/", Name: "高校"},
+		{URL: "https://www.hdupt.com/", Name: "高校"},
+	}
+	added, updated, skipped := mergeTargetsOverwrite(incoming, nil, false)
+	if len(added) != 1 || skipped != 1 || updated != 0 {
+		t.Fatalf("apex 与 www 应只新增一条: added=%d updated=%d skipped=%d %+v", len(added), updated, skipped, added)
+	}
+	if dup := findDuplicateTarget(added, nil); dup != "" {
+		t.Fatalf("合并结果仍过不了保存校验: %s", dup)
+	}
+}
+
+// 同一个漏洞在 CookieCloud 定时自动导入的路径上（mergeTargets）。
+func TestMergeTargetsApexAndWWWKeepsOne(t *testing.T) {
+	incoming := []Target{
+		{URL: "https://hdupt.com/"},
+		{URL: "https://www.hdupt.com/"},
+	}
+	added, skipped := mergeTargets(incoming, nil)
+	if len(added) != 1 || skipped != 1 {
+		t.Fatalf("apex 与 www 应只新增一条: added=%d skipped=%d %+v", len(added), skipped, added)
+	}
+	if dup := findDuplicateTarget(added, nil); dup != "" {
+		t.Fatalf("合并结果仍过不了保存校验: %s", dup)
+	}
+}
+
+// 已有 apex 目标时，再导入用户手动改过的 www 版本应被跳过，不能新增。
+func TestMergeTargetsSkipsWWWWhenApexExists(t *testing.T) {
+	existing := []Target{{URL: "https://hdupt.com/"}}
+	added, skipped := mergeTargets([]Target{{URL: "https://www.hdupt.com/"}}, existing)
+	if len(added) != 0 || skipped != 1 {
+		t.Fatalf("已有 apex 时应跳过 www: added=%d skipped=%d", len(added), skipped)
+	}
+}
+
+// 候选列表里 apex 与 www 会显示成同一个名字（都剥掉 www 查站点名表），
+// 必须合并成一条，否则用户勾选后又会触发「同一站点」的保存报错。
+func TestDedupeCandidatesMergesApexAndWWW(t *testing.T) {
+	list := []siteCandidate{
+		{Domain: "example.com", Name: "示例", Source: "cookie"},
+		{Domain: "www.example.com", Name: "示例", Source: "cookie"},
+	}
+	got := dedupeCandidates(list)
+	if len(got) != 1 {
+		t.Fatalf("同一注册域名应合并成一条，实际 %d 条: %+v", len(got), got)
+	}
+	// 凭据相同时优先 apex：cookie 与 localStorage 都按父域匹配，
+	// apex 目标能拿到 www 名下的凭据，反过来拿不到。
+	if got[0].Domain != "example.com" {
+		t.Fatalf("应保留 apex，实际 %q", got[0].Domain)
+	}
+}
+
+// 只有 www 那条带凭据时要保留 www，否则合并后登录态会丢。
+func TestDedupeCandidatesKeepsCredentialHost(t *testing.T) {
+	list := []siteCandidate{
+		{Domain: "example.com", Name: "示例"},
+		{Domain: "www.example.com", Name: "示例", Source: "cookie"},
+	}
+	got := dedupeCandidates(list)
+	if len(got) != 1 || got[0].Domain != "www.example.com" || got[0].Source != "cookie" {
+		t.Fatalf("应保留带 cookie 的 www: %+v", got)
+	}
+}
+
+// 一条只有 cookie、一条只有 localStorage 时，合并后应标成 both 并保留 Exists。
+func TestDedupeCandidatesMergesSourceAndExists(t *testing.T) {
+	list := []siteCandidate{
+		{Domain: "example.com", Name: "示例", Source: "cookie"},
+		{Domain: "www.example.com", Name: "示例", Source: "localStorage", Exists: true},
+	}
+	got := dedupeCandidates(list)
+	if len(got) != 1 {
+		t.Fatalf("应合并成一条，实际 %d 条", len(got))
+	}
+	if got[0].Source != "both" {
+		t.Fatalf("两种凭据都有时应标 both，实际 %q", got[0].Source)
+	}
+	if !got[0].Exists {
+		t.Fatal("任一条已在目标列表里，合并后应保留 Exists")
+	}
+}
+
+// 不同注册域名的候选不能被误合并。
+func TestDedupeCandidatesKeepsDistinctSites(t *testing.T) {
+	list := []siteCandidate{
+		{Domain: "example.com", Name: "示例"},
+		{Domain: "hdupt.com", Name: "高校"},
+		{Domain: "kp.m-team.cc", Name: "馒头"},
+	}
+	got := dedupeCandidates(list)
+	if len(got) != 3 {
+		t.Fatalf("不同站点不应合并，实际 %d 条: %+v", len(got), got)
+	}
+}
