@@ -434,11 +434,67 @@ func TestF1RegisteredDomain(t *testing.T) {
 		"www.pttime.org":          "pttime.org",
 		"gamegamept.com":          "gamegamept.com",
 		"a.b.c.d.example.com":     "a.b.c.d.example.com", // 超过三段原样保留
+		"example.com.cn":          "example.com.cn",      // 二级公共后缀，不能截成 com.cn
+		"www.example.com.cn":      "example.com.cn",      // 二级公共后缀下的 www 要归并
+		"a.b.example.com.cn":      "example.com.cn",
+		"www.foo.co.uk":           "foo.co.uk",
+		"example.com.":            "example.com", // FQDN 尾点
 	}
 	for in, want := range cases {
 		if got := registeredDomain(in); got != want {
 			t.Errorf("registeredDomain(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestF1RegisteredDomainMultiPartSuffix 验证二级公共后缀（.com.cn/.co.uk）下
+// apex 与 www 归并，同时不同注册域名不会被并成一条。
+func TestF1RegisteredDomainMultiPartSuffix(t *testing.T) {
+	same := [][2]string{
+		{"example.com.cn", "www.example.com.cn"},
+		{"foo.co.uk", "www.foo.co.uk"},
+		{"example.co.jp", "www.example.co.jp"},
+		{"example.com.br", "www.example.com.br"},
+		{"example.pp.ua", "www.example.pp.ua"},
+		{"example.com.hk", "www.example.com.hk"},
+	}
+	for _, p := range same {
+		a, b := registeredDomain(p[0]), registeredDomain(p[1])
+		if a == "" || a != b {
+			t.Errorf("%q→%q 与 %q→%q 应归并为同一站", p[0], a, p[1], b)
+		}
+	}
+	diff := [][2]string{
+		{"a.com.cn", "b.com.cn"},
+		{"a.co.uk", "b.co.uk"},
+		{"hdupt.com", "hdsky.me"},
+	}
+	for _, p := range diff {
+		if a, b := registeredDomain(p[0]), registeredDomain(p[1]); a == b {
+			t.Errorf("%q 与 %q 不应归并，却都算成了 %q", p[0], p[1], a)
+		}
+	}
+	// 三段注册域名不能被截成公共后缀本身，否则所有同后缀的站会撞在一起
+	for _, in := range []string{"example.com.cn", "foo.co.uk", "example.com.hk"} {
+		switch got := registeredDomain(in); got {
+		case "com.cn", "co.uk", "com.hk":
+			t.Errorf("registeredDomain(%q) 被错误截成公共后缀 %q", in, got)
+		}
+	}
+}
+
+// TestF1MultiPartSuffixSitesNotDuplicate 验证同后缀的不同站在保存校验里不算重复，
+// 而 apex 与 www 仍然算重复。
+//
+// 回归：收录二级公共后缀之前，a.com.cn 与 b.com.cn 都会被算成 com.cn，
+// 两个毫不相干的站会被判成「同一站点」。
+func TestF1MultiPartSuffixSitesNotDuplicate(t *testing.T) {
+	incoming := []Target{{URL: "https://a.com.cn/"}, {URL: "https://b.com.cn/"}}
+	if dup := findDuplicateTarget(incoming, nil); dup != "" {
+		t.Fatalf("不同站点被判成重复: %s", dup)
+	}
+	if dup := findDuplicateTarget([]Target{{URL: "https://www.a.com.cn/"}}, incoming); dup == "" {
+		t.Fatal("a.com.cn 与 www.a.com.cn 应判为同一站")
 	}
 }
 
